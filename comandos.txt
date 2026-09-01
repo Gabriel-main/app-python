@@ -1,0 +1,12 @@
+
+## Para ejecutar en pc
+flet run main.py
+
+## Para ejecutar en web
+flet run --web main.py
+
+## Para ejecutar en Android
+flet run --android main.py
+
+## Para ejecutar en iOS
+flet run --ios main.py
