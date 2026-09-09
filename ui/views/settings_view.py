@@ -2,12 +2,11 @@
 Settings View — Configuración del bot de trading.
 
 Permite al usuario cambiar:
-- Par de trading (símbolo)
 - Modo de operación (Paper / Live)
 - Tipo de trading (Spot/Futures/Margin)
 - API Keys (solo en modo Live, campos con password=True)
 
-Al guardar: publica SettingsUpdatedEvent para que los servicios se reconfiguren.
+Al guardar: muestra modal de confirmación, luego publica SettingsUpdatedEvent.
 """
 from __future__ import annotations
 
@@ -27,18 +26,6 @@ class SettingsView(ft.Column):
         super().__init__()
 
         # --- Campos de formulario ---
-        self._symbol_field = ft.TextField(
-            label="Par de Trading",
-            value=settings.TRADING_SYMBOL,
-            hint_text="Ej: BTCUSDT, ETHUSDT",
-            prefix_icon=ft.Icons.CURRENCY_BITCOIN,
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            border_color=ft.Colors.BLUE_GREY_700,
-            focused_border_color=ft.Colors.BLUE_400,
-            color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
-        )
-
         self._mode_dropdown = ft.Dropdown(
             label="Modo de Operación",
             value=settings.TRADING_MODE,
@@ -182,20 +169,6 @@ class SettingsView(ft.Column):
             ft.Text("Configuración", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
 
-            # Símbolo
-            ft.Container(
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-                border_radius=14,
-                padding=ft.Padding.all(16),
-                content=ft.Column(
-                    controls=[
-                        ft.Text("📈 Par de Trading", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
-                        self._symbol_field,
-                    ],
-                    spacing=12,
-                ),
-            ),
-
             # Modo
             ft.Container(
                 bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
@@ -266,7 +239,79 @@ class SettingsView(ft.Column):
         self._limit_price_field.update()
 
     def _on_save(self, e: ft.ControlEvent) -> None:
-        symbol = (self._symbol_field.value or "BTCUSDT").strip().upper()
+        """Abre modal de confirmación antes de guardar."""
+        self._show_confirm_dialog()
+
+    def _show_confirm_dialog(self) -> None:
+        """Muestra modal de confirmación con resumen de cambios."""
+        mode = self._mode_dropdown.value or "PAPER"
+        trading_type = self._trading_type_dropdown.value or "SPOT"
+        leverage = int(self._leverage_dropdown.value or "1")
+        order_type = self._order_type_dropdown.value or "MARKET"
+        limit_price = float(self._limit_price_field.value or "0")
+
+        # Construir resumen de cambios
+        changes = []
+        if mode != settings.TRADING_MODE:
+            changes.append(f"Modo: {settings.TRADING_MODE} → {mode}")
+        if trading_type != settings.TRADING_TYPE:
+            changes.append(f"Tipo: {settings.TRADING_TYPE} → {trading_type}")
+        if leverage != settings.LEVERAGE:
+            changes.append(f"Leverage: {settings.LEVERAGE}x → {leverage}x")
+        if order_type != settings.ORDER_TYPE:
+            changes.append(f"Orden: {settings.ORDER_TYPE} → {order_type}")
+        if limit_price != settings.LIMIT_PRICE and settings.ORDER_TYPE == "LIMIT":
+            changes.append(f"Precio Límite: ${settings.LIMIT_PRICE} → ${limit_price}")
+
+        if not changes:
+            changes.append("No hay cambios detectados")
+
+        # Crear modal
+        self._confirm_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirmar Cambios", color=ft.Colors.WHITE),
+            bgcolor=ft.Colors.GREY_900,
+            content=ft.Column(
+                controls=[
+                    ft.Text("Se aplicarán los siguientes cambios:", color=ft.Colors.BLUE_GREY_300),
+                    ft.Container(height=8),
+                    *[ft.Text(f"• {c}", color=ft.Colors.WHITE, size=13) for c in changes],
+                    ft.Container(height=8),
+                    ft.Text(
+                        "El servicio se reconectará.",
+                        size=11,
+                        color=ft.Colors.AMBER_400,
+                    ),
+                ],
+                spacing=0,
+                width=300,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Cancelar",
+                    on_click=lambda _: self._close_dialog(),
+                ),
+                ft.FilledButton(
+                    "Confirmar",
+                    on_click=lambda _: self._apply_changes(),
+                    style=ft.ButtonStyle(
+                        bgcolor=ft.Colors.BLUE_800,
+                        color=ft.Colors.WHITE,
+                    ),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(self._confirm_dialog)
+        self._confirm_dialog.open = True
+        self.page.update()
+
+    def _apply_changes(self) -> None:
+        """Aplica los cambios después de confirmar en el modal."""
+        self._close_dialog()
+
+        symbol = settings.TRADING_SYMBOL  # Se toma del Dashboard SymbolPicker
         mode = self._mode_dropdown.value or "PAPER"
         trading_type = self._trading_type_dropdown.value or "SPOT"
         leverage = int(self._leverage_dropdown.value or "1")
@@ -276,7 +321,7 @@ class SettingsView(ft.Column):
         api_secret = self._api_secret_field.value or ""
 
         # Actualizar .env en disco
-        self._write_env(symbol, mode, trading_type, leverage, order_type, limit_price,
+        self._write_env(mode, trading_type, leverage, order_type, limit_price,
                         api_key, api_secret)
 
         # Recargar settings en memoria
@@ -304,8 +349,17 @@ class SettingsView(ft.Column):
         self._feedback_text.color = ft.Colors.GREEN_400
         self._feedback_text.update()
 
+    def _close_dialog(self) -> None:
+        """Cierra el modal de confirmación."""
+        if hasattr(self, '_confirm_dialog') and self._confirm_dialog:
+            self._confirm_dialog.open = False
+            self.page.update()
+            # Limpiar overlay
+            if self._confirm_dialog in self.page.overlay:
+                self.page.overlay.remove(self._confirm_dialog)
+
     @staticmethod
-    def _write_env(symbol: str, mode: str, trading_type: str, leverage: int,
+    def _write_env(mode: str, trading_type: str, leverage: int,
                    order_type: str, limit_price: float,
                    api_key: str, api_secret: str) -> None:
         """Escribe/actualiza el archivo .env con la nueva configuración."""
@@ -322,18 +376,11 @@ class SettingsView(ft.Column):
             lines.append(f"{key}={val}")
             return lines
 
-        lines = set_var(lines, "TRADING_SYMBOL", symbol)
         lines = set_var(lines, "TRADING_MODE", mode)
         lines = set_var(lines, "TRADING_TYPE", trading_type)
         lines = set_var(lines, "LEVERAGE", str(leverage))
         lines = set_var(lines, "ORDER_TYPE", order_type)
         lines = set_var(lines, "LIMIT_PRICE", str(limit_price))
-        lines = set_var(lines, "TRADE_AMOUNT", str(settings.TRADE_AMOUNT))
-        lines = set_var(lines, "TRADE_CURRENCY", settings.TRADE_CURRENCY)
-        lines = set_var(lines, "STOP_LOSS", str(settings.STOP_LOSS))
-        lines = set_var(lines, "STOP_LOSS_TYPE", settings.STOP_LOSS_TYPE)
-        lines = set_var(lines, "TIMEFRAME", str(settings.TIMEFRAME))
-        lines = set_var(lines, "TIMEFRAME_UNIT", settings.TIMEFRAME_UNIT)
         lines = set_var(lines, "BINANCE_API_KEY", api_key)
         lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
 
