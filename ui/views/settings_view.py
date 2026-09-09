@@ -51,6 +51,7 @@ class SettingsView(ft.Column):
             focused_border_color=ft.Colors.GREEN_400,
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            expand=True,
         )
 
         self._ma_slow_field = ft.TextField(
@@ -64,6 +65,7 @@ class SettingsView(ft.Column):
             focused_border_color=ft.Colors.ORANGE_400,
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            expand=True,
         )
 
         self._mode_dropdown = ft.Dropdown(
@@ -156,7 +158,13 @@ class SettingsView(ft.Column):
                     controls=[
                         ft.Text("📈 Estrategia MA Crossover", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                         self._symbol_field,
-                        ft.Row(controls=[self._ma_fast_field, self._ma_slow_field], spacing=12),
+                        ft.Row(
+                            controls=[
+                                self._ma_fast_field,
+                                self._ma_slow_field,
+                            ],
+                            spacing=12,
+                        ),
                         ft.Text(
                             "El bot genera señal BUY cuando MA rápida supera MA lenta, y SELL cuando cruza por debajo.",
                             size=11, color=ft.Colors.BLUE_GREY_400,

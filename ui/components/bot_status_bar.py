@@ -38,7 +38,7 @@ class BotStatusBar(ft.Container):
         self._ma_slow_text = ft.Text("MA(25): ---", size=11, color=ft.Colors.BLUE_GREY_300)
         self._confidence_bar = ft.ProgressBar(
             value=0.0,
-            width=120,
+            width=140,
             color=ft.Colors.BLUE_GREY_400,
             bgcolor=ft.Colors.BLUE_GREY_900,
         )

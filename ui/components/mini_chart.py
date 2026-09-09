@@ -21,7 +21,6 @@ from core.events import PriceTickEvent
 class MiniChart(ft.Container):
     """Sparkline de precio de los últimos PRICE_BUFFER_SIZE ticks."""
 
-    WIDTH = 340
     HEIGHT = 90
     PADDING = 8
 
@@ -31,8 +30,8 @@ class MiniChart(ft.Container):
         self._prices: deque[float] = deque(maxlen=settings.PRICE_BUFFER_SIZE)
 
         self._canvas = cv.Canvas(
-            content=ft.Container(),  # placeholder
-            width=self.WIDTH,
+            content=ft.Container(),
+            width=300,  # default, se recalcula en _redraw
             height=self.HEIGHT,
         )
 
@@ -46,6 +45,7 @@ class MiniChart(ft.Container):
         self.bgcolor = ft.Colors.with_opacity(0.05, ft.Colors.WHITE)
         self.border_radius = 12
         self.padding = self.PADDING
+        self.expand = True
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -77,13 +77,17 @@ class MiniChart(ft.Container):
         max_p = max(prices)
         price_range = max_p - min_p or 1
 
-        w = self.WIDTH - self.PADDING * 2
+        # Usar ancho real del contenedor si está disponible
+        canvas_width = max(self.width or 300, 200) - self.PADDING * 2
         h = self.HEIGHT - self.PADDING * 2
         n = len(prices)
 
+        # Actualizar ancho del canvas
+        self._canvas.width = canvas_width + self.PADDING * 2
+
         # Normalizar puntos a coordenadas de canvas
         def to_xy(i: int, p: float):
-            x = (i / (n - 1)) * w + self.PADDING
+            x = (i / (n - 1)) * canvas_width + self.PADDING
             y = h - ((p - min_p) / price_range) * h + self.PADDING
             return x, y
 

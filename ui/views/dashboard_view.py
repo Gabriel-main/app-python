@@ -160,6 +160,23 @@ class DashboardView(ft.Column):
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
 
     # ------------------------------------------------------------------
+    # Responsive — se llama desde app_layout.on_resize
+    # ------------------------------------------------------------------
+    def _on_resize(self, width: float, height: float) -> None:
+        """Ajusta tamaños de fuente según ancho de pantalla."""
+        is_small = width < 360
+        # Stats
+        stats_size = 11 if is_small else 13
+        self._high_text.style = ft.TextStyle(size=stats_size, weight=ft.FontWeight.W_600, color=ft.Colors.GREEN_400)
+        self._low_text.style = ft.TextStyle(size=stats_size, weight=ft.FontWeight.W_600, color=ft.Colors.RED_400)
+        self._vol_text.style = ft.TextStyle(size=stats_size, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_300)
+        self._high_text.update()
+        self._low_text.update()
+        self._vol_text.update()
+        # Propagar a hijos
+        self._ticker._on_resize(width, height)
+
+    # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
     async def _on_price_tick(self, event: PriceTickEvent) -> None:

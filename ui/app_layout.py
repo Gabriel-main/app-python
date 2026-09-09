@@ -41,9 +41,11 @@ async def main(page: ft.Page) -> None:
     page.title = settings.APP_TITLE
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = "#0a0e1a"  # Azul oscuro profundo
-    page.padding = ft.Padding(left=16, right=16, top=0, bottom=0)
+    page.padding = 0
     page.window.width = 400
     page.window.height = 850
+    page.window.min_width = 320
+    page.window.min_height = 500
 
     # Tema premium
     page.theme = ft.Theme(
@@ -65,7 +67,7 @@ async def main(page: ft.Page) -> None:
     view_container = ft.Container(
         content=dashboard,
         expand=True,
-        padding=ft.Padding(left=0, right=0, top=16, bottom=8),
+        padding=ft.Padding(left=0, right=0, top=8, bottom=8),
     )
 
     # ------------------------------------------------------------------
@@ -123,7 +125,22 @@ async def main(page: ft.Page) -> None:
         ),
     )
 
-    page.add(background)
+    page.add(
+        ft.SafeArea(
+            expand=True,
+            content=background,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # Resize handler — propaga tamaño a vistas hijas
+    # ------------------------------------------------------------------
+    def on_resize(e: ft.ControlEvent) -> None:
+        for view in views:
+            if hasattr(view, '_on_resize'):
+                view._on_resize(page.window.width, page.window.height)
+
+    page.on_resize = on_resize
 
     # ------------------------------------------------------------------
     # Inicialización de servicios (en orden)

@@ -44,7 +44,8 @@ class PriceTicker(ft.Column):
             padding=ft.Padding(left=8, right=8, top=3, bottom=3),
         )
         self._flash_overlay = ft.Container(
-            width=200, height=50,
+            expand=True,
+            height=50,
             border_radius=8,
             opacity=0,
             animate_opacity=ft.Animation(300, ft.AnimationCurve.EASE_OUT),
@@ -68,6 +69,20 @@ class PriceTicker(ft.Column):
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
+
+    # ------------------------------------------------------------------
+    # Responsive — se llama desde DashboardView._on_resize
+    # ------------------------------------------------------------------
+    def _on_resize(self, width: float, height: float) -> None:
+        """Ajusta tamaño de fuente del precio según ancho de pantalla."""
+        is_small = width < 360
+        price_size = 28 if is_small else 36
+        self._price_text.style = ft.TextStyle(
+            size=price_size,
+            weight=ft.FontWeight.BOLD,
+            color=self._price_text.color,
+        )
+        self._price_text.update()
 
     # ------------------------------------------------------------------
     # Handler
