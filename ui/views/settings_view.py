@@ -3,15 +3,14 @@ Settings View — Configuración del bot de trading.
 
 Permite al usuario cambiar:
 - Par de trading (símbolo)
-- Parámetros de estrategia (MA rápida / MA lenta)
 - Modo de operación (Paper / Live)
+- Tipo de trading (Spot/Futures/Margin)
 - API Keys (solo en modo Live, campos con password=True)
 
 Al guardar: publica SettingsUpdatedEvent para que los servicios se reconfiguren.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import flet as ft
@@ -40,34 +39,6 @@ class SettingsView(ft.Column):
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
         )
 
-        self._ma_fast_field = ft.TextField(
-            label="MA Rápida",
-            value=str(settings.BOT_MA_FAST),
-            hint_text="Ej: 7",
-            prefix_icon=ft.Icons.SPEED,
-            keyboard_type=ft.KeyboardType.NUMBER,
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            border_color=ft.Colors.BLUE_GREY_700,
-            focused_border_color=ft.Colors.GREEN_400,
-            color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
-            expand=True,
-        )
-
-        self._ma_slow_field = ft.TextField(
-            label="MA Lenta",
-            value=str(settings.BOT_MA_SLOW),
-            hint_text="Ej: 25",
-            prefix_icon=ft.Icons.SHOW_CHART,
-            keyboard_type=ft.KeyboardType.NUMBER,
-            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-            border_color=ft.Colors.BLUE_GREY_700,
-            focused_border_color=ft.Colors.ORANGE_400,
-            color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
-            expand=True,
-        )
-
         self._mode_dropdown = ft.Dropdown(
             label="Modo de Operación",
             value=settings.TRADING_MODE,
@@ -81,6 +52,68 @@ class SettingsView(ft.Column):
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
             on_select=self._on_mode_changed,
+        )
+
+        # --- Trading Type (Spot/Futures/Margin) ---
+        self._trading_type_dropdown = ft.Dropdown(
+            label="Tipo de Trading",
+            value=settings.TRADING_TYPE,
+            options=[
+                ft.DropdownOption(key="SPOT", text="💰 Spot"),
+                ft.DropdownOption(key="FUTURES", text="📈 Futures (USDT-M)"),
+                ft.DropdownOption(key="MARGIN", text="🔄 Cross Margin"),
+            ],
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.PURPLE_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            on_select=self._on_trading_type_changed,
+        )
+
+        # --- Leverage (solo Futures/Margin) ---
+        leverage_options = [ft.DropdownOption(key=str(i), text=f"{i}x") for i in [1, 2, 3, 5, 10, 15, 20]]
+        self._leverage_dropdown = ft.Dropdown(
+            label="Leverage",
+            value=str(settings.LEVERAGE),
+            options=leverage_options,
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.PURPLE_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            visible=settings.TRADING_TYPE in ("FUTURES", "MARGIN"),
+        )
+
+        # --- Order Type (MARKET/LIMIT) ---
+        self._order_type_dropdown = ft.Dropdown(
+            label="Tipo de Orden",
+            value=settings.ORDER_TYPE,
+            options=[
+                ft.DropdownOption(key="MARKET", text="⚡ Market (Inmediata)"),
+                ft.DropdownOption(key="LIMIT", text="🎯 Limit (Con precio)"),
+            ],
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.CYAN_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            on_select=self._on_order_type_changed,
+        )
+
+        # --- Limit Price (solo LIMIT) ---
+        self._limit_price_field = ft.TextField(
+            label="Precio Límite",
+            value=str(settings.LIMIT_PRICE) if settings.LIMIT_PRICE > 0 else "",
+            hint_text="Ej: 65000.00",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.CYAN_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            visible=settings.ORDER_TYPE == "LIMIT",
         )
 
         self._api_key_field = ft.TextField(
@@ -149,26 +182,15 @@ class SettingsView(ft.Column):
             ft.Text("Configuración", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
 
-            # Estrategia
+            # Símbolo
             ft.Container(
                 bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
                 border_radius=14,
                 padding=ft.Padding.all(16),
                 content=ft.Column(
                     controls=[
-                        ft.Text("📈 Estrategia MA Crossover", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                        ft.Text("📈 Par de Trading", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                         self._symbol_field,
-                        ft.Row(
-                            controls=[
-                                self._ma_fast_field,
-                                self._ma_slow_field,
-                            ],
-                            spacing=12,
-                        ),
-                        ft.Text(
-                            "El bot genera señal BUY cuando MA rápida supera MA lenta, y SELL cuando cruza por debajo.",
-                            size=11, color=ft.Colors.BLUE_GREY_400,
-                        ),
                     ],
                     spacing=12,
                 ),
@@ -186,6 +208,27 @@ class SettingsView(ft.Column):
                         self._live_warning,
                         self._api_key_field,
                         self._api_secret_field,
+                    ],
+                    spacing=12,
+                ),
+            ),
+
+            # Tipo de Trading
+            ft.Container(
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                border_radius=14,
+                padding=ft.Padding.all(16),
+                content=ft.Column(
+                    controls=[
+                        ft.Text("🔄 Tipo de Trading", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                        self._trading_type_dropdown,
+                        self._leverage_dropdown,
+                        self._order_type_dropdown,
+                        self._limit_price_field,
+                        ft.Text(
+                            "Futures/Margin permiten leverage y posiciones long/short.",
+                            size=11, color=ft.Colors.BLUE_GREY_400,
+                        ),
                     ],
                     spacing=12,
                 ),
@@ -211,29 +254,30 @@ class SettingsView(ft.Column):
         self._api_secret_field.update()
         self._live_warning.update()
 
+    def _on_trading_type_changed(self, e: ft.ControlEvent) -> None:
+        trading_type = e.control.value
+        show_leverage = trading_type in ("FUTURES", "MARGIN")
+        self._leverage_dropdown.visible = show_leverage
+        self._leverage_dropdown.update()
+
+    def _on_order_type_changed(self, e: ft.ControlEvent) -> None:
+        is_limit = e.control.value == "LIMIT"
+        self._limit_price_field.visible = is_limit
+        self._limit_price_field.update()
+
     def _on_save(self, e: ft.ControlEvent) -> None:
-        try:
-            ma_fast = int(self._ma_fast_field.value or "7")
-            ma_slow = int(self._ma_slow_field.value or "25")
-        except ValueError:
-            self._feedback_text.value = "❌ MA Rápida y MA Lenta deben ser números enteros."
-            self._feedback_text.color = ft.Colors.RED_400
-            self._feedback_text.update()
-            return
-
-        if ma_fast >= ma_slow:
-            self._feedback_text.value = "❌ MA Rápida debe ser menor que MA Lenta."
-            self._feedback_text.color = ft.Colors.RED_400
-            self._feedback_text.update()
-            return
-
         symbol = (self._symbol_field.value or "BTCUSDT").strip().upper()
         mode = self._mode_dropdown.value or "PAPER"
+        trading_type = self._trading_type_dropdown.value or "SPOT"
+        leverage = int(self._leverage_dropdown.value or "1")
+        order_type = self._order_type_dropdown.value or "MARKET"
+        limit_price = float(self._limit_price_field.value or "0")
         api_key = self._api_key_field.value or ""
         api_secret = self._api_secret_field.value or ""
 
         # Actualizar .env en disco
-        self._write_env(symbol, mode, ma_fast, ma_slow, api_key, api_secret)
+        self._write_env(symbol, mode, trading_type, leverage, order_type, limit_price,
+                        api_key, api_secret)
 
         # Recargar settings en memoria
         settings.reload_from_env()
@@ -241,9 +285,17 @@ class SettingsView(ft.Column):
         # Publicar evento para que los servicios reaccionen
         event_bus.publish(SettingsUpdatedEvent(
             symbol=symbol,
-            ma_fast=ma_fast,
-            ma_slow=ma_slow,
             mode=mode,
+            trading_type=trading_type,
+            leverage=leverage,
+            order_type=order_type,
+            limit_price=limit_price,
+            trade_amount=settings.TRADE_AMOUNT,
+            trade_currency=settings.TRADE_CURRENCY,
+            stop_loss=settings.STOP_LOSS,
+            stop_loss_type=settings.STOP_LOSS_TYPE,
+            timeframe=settings.TIMEFRAME,
+            timeframe_unit=settings.TIMEFRAME_UNIT,
             api_key=api_key,
             api_secret=api_secret,
         ))
@@ -253,7 +305,8 @@ class SettingsView(ft.Column):
         self._feedback_text.update()
 
     @staticmethod
-    def _write_env(symbol: str, mode: str, ma_fast: int, ma_slow: int,
+    def _write_env(symbol: str, mode: str, trading_type: str, leverage: int,
+                   order_type: str, limit_price: float,
                    api_key: str, api_secret: str) -> None:
         """Escribe/actualiza el archivo .env con la nueva configuración."""
         env_path = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -271,8 +324,16 @@ class SettingsView(ft.Column):
 
         lines = set_var(lines, "TRADING_SYMBOL", symbol)
         lines = set_var(lines, "TRADING_MODE", mode)
-        lines = set_var(lines, "BOT_MA_FAST", str(ma_fast))
-        lines = set_var(lines, "BOT_MA_SLOW", str(ma_slow))
+        lines = set_var(lines, "TRADING_TYPE", trading_type)
+        lines = set_var(lines, "LEVERAGE", str(leverage))
+        lines = set_var(lines, "ORDER_TYPE", order_type)
+        lines = set_var(lines, "LIMIT_PRICE", str(limit_price))
+        lines = set_var(lines, "TRADE_AMOUNT", str(settings.TRADE_AMOUNT))
+        lines = set_var(lines, "TRADE_CURRENCY", settings.TRADE_CURRENCY)
+        lines = set_var(lines, "STOP_LOSS", str(settings.STOP_LOSS))
+        lines = set_var(lines, "STOP_LOSS_TYPE", settings.STOP_LOSS_TYPE)
+        lines = set_var(lines, "TIMEFRAME", str(settings.TIMEFRAME))
+        lines = set_var(lines, "TIMEFRAME_UNIT", settings.TIMEFRAME_UNIT)
         lines = set_var(lines, "BINANCE_API_KEY", api_key)
         lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
 

@@ -30,6 +30,13 @@ class PriceTickEvent:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass
+class SymbolsListEvent:
+    """Lista de símbolos disponibles (USDT/USDC) con precios actuales."""
+    symbols: list[dict]  # [{symbol, base_asset, quote_asset, price}]
+    timestamp: float = field(default_factory=time.time)
+
+
 # ---------------------------------------------------------------------------
 # Eventos del Bot Engine
 # ---------------------------------------------------------------------------
@@ -54,6 +61,71 @@ class OrderExecutedEvent:
     quantity: float
     price: float
     mode: Literal["PAPER", "LIVE"]
+    trading_type: Literal["SPOT", "FUTURES", "MARGIN"] = "SPOT"
+    leverage: int = 1
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    timestamp: float = field(default_factory=time.time)
+
+
+# ---------------------------------------------------------------------------
+# Eventos de Operaciones Dual (OC/OV)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OperationState:
+    """Estado de una operación individual (COMPRA o VENTA)."""
+    side: Literal["BUY", "SELL"]
+    state: Literal["ACTIVE", "PENDING", "PAST"]
+    entry_price: float       # Pe
+    stop_loss: float         # PSL
+    quantity: float
+    order_id: str
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class OperationUpdateEvent:
+    """Actualización del estado de todas las operaciones activas/pendientes."""
+    operations: list[OperationState] = field(default_factory=list)
+    timeframe_remaining: float = 0.0  # segundos restantes del timer
+    timeframe_total: float = 0.0      # segundos totales del timer
+    timestamp: float = field(default_factory=time.time)
+
+
+# ---------------------------------------------------------------------------
+# Eventos de Posiciones (Futures/Margin)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PositionUpdateEvent:
+    """Actualización de posición abierta con PnL no realizado."""
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    quantity: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+    leverage: int
+    trading_type: Literal["FUTURES", "MARGIN"]
+    timestamp: float = field(default_factory=time.time)
+
+
+# ---------------------------------------------------------------------------
+# Eventos de Fondos (Account Balance)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BalanceUpdateEvent:
+    """Saldo de la cuenta del usuario según TRADING_TYPE."""
+    asset: str                          # "USDT" | "USDC"
+    trading_type: str                   # "SPOT" | "FUTURES" | "MARGIN"
+    free: float                         # Saldo disponible
+    locked: float = 0.0                 # Bloqueado en órdenes (Spot)
+    borrowed: float = 0.0               # Prestado (Margin)
+    interest: float = 0.0               # Interés (Margin)
+    available: float = 0.0              # Disponible para operar (Futures)
+    unrealized_pnl: float = 0.0         # PnL no realizado (Futures)
+    margin_level: float = 0.0           # Nivel de margen (Margin)
     timestamp: float = field(default_factory=time.time)
 
 
@@ -80,8 +152,16 @@ class BotStateChangedEvent:
 class SettingsUpdatedEvent:
     """El usuario guardó nueva configuración desde Settings."""
     symbol: str
-    ma_fast: int
-    ma_slow: int
     mode: Literal["PAPER", "LIVE"]
+    trading_type: Literal["SPOT", "FUTURES", "MARGIN"] = "SPOT"
+    leverage: int = 1
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    limit_price: float = 0.0
+    trade_amount: float = 10.0
+    trade_currency: str = "USDT"
+    stop_loss: float = 1.01
+    stop_loss_type: str = "PERCENT"
+    timeframe: int = 1
+    timeframe_unit: str = "MINUTES"
     api_key: str = ""
     api_secret: str = ""

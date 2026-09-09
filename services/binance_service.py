@@ -7,6 +7,8 @@ Responsabilidades:
 - Publicar ConnectionStatusEvent en cada cambio de estado
 - Reconexión automática con backoff exponencial
 - Suscribirse a SettingsUpdatedEvent para reconectar con nuevo símbolo/keys
+- Soportar Spot, Futures y Cross Margin según TRADING_TYPE
+- Consultar y publicar saldos de cuenta (auto-refresh)
 
 En PAPER mode sin API keys: usa un simulador de ticks (MockTickGenerator).
 """
@@ -17,13 +19,14 @@ import logging
 import math
 import random
 import time
-import uuid
 
 from core.event_bus import event_bus
 from core.events import (
+    BalanceUpdateEvent,
     ConnectionStatusEvent,
     PriceTickEvent,
     SettingsUpdatedEvent,
+    SymbolsListEvent,
 )
 from config.settings import settings
 from database.db_queue import db_queue
@@ -74,6 +77,10 @@ class BinanceService:
         self._mock = MockTickGenerator()
         self._retry_count: int = 0
 
+        # Balance auto-refresh
+        self._balance_task: asyncio.Task | None = None
+        self._balance_interval: float = 30.0  # segundos
+
     # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
@@ -87,11 +94,13 @@ class BinanceService:
         self._stream_task = asyncio.create_task(
             self._run_with_reconnect(), name="binance_stream"
         )
+        self._start_balance_loop()
         log.info("BinanceService starting for symbol: %s", settings.TRADING_SYMBOL)
 
     async def stop(self) -> None:
         self._running = False
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._stop_balance_loop()
         if self._stream_task:
             self._stream_task.cancel()
             try:
@@ -154,7 +163,7 @@ class BinanceService:
                 await asyncio.sleep(delay)
 
     # ------------------------------------------------------------------
-    # Stream real (Binance WebSocket)
+    # Stream real (Binance WebSocket) — según TRADING_TYPE
     # ------------------------------------------------------------------
 
     async def _run_live_stream(self) -> None:
@@ -162,24 +171,47 @@ class BinanceService:
         from binance.exceptions import BinanceAPIException, BinanceRequestException  # type: ignore
 
         try:
-            self._client = await AsyncClient.create(
-                api_key=settings.BINANCE_API_KEY,
-                api_secret=settings.BINANCE_API_SECRET,
-                testnet=settings.BINANCE_TESTNET,
-            )
+            # Crear cliente con endpoint correcto según TRADING_TYPE
+            if settings.TRADING_TYPE == "FUTURES":
+                self._client = await AsyncClient.create(
+                    api_key=settings.BINANCE_API_KEY,
+                    api_secret=settings.BINANCE_API_SECRET,
+                    testnet=settings.BINANCE_TESTNET,
+                    futures=True,
+                )
+            elif settings.TRADING_TYPE == "MARGIN":
+                self._client = await AsyncClient.create(
+                    api_key=settings.BINANCE_API_KEY,
+                    api_secret=settings.BINANCE_API_SECRET,
+                    testnet=settings.BINANCE_TESTNET,
+                )
+            else:  # SPOT
+                self._client = await AsyncClient.create(
+                    api_key=settings.BINANCE_API_KEY,
+                    api_secret=settings.BINANCE_API_SECRET,
+                    testnet=settings.BINANCE_TESTNET,
+                )
+
             bm = BinanceSocketManager(self._client)
             symbol_lower = settings.TRADING_SYMBOL.lower()
 
-            async with bm.symbol_ticker_socket(symbol_lower) as ts:
+            # Seleccionar stream según TRADING_TYPE
+            if settings.TRADING_TYPE == "FUTURES":
+                stream_context = bm.futures_socket()
+            elif settings.TRADING_TYPE == "MARGIN":
+                stream_context = bm.margin_socket()
+            else:  # SPOT
+                stream_context = bm.symbol_ticker_socket(symbol_lower)
+
+            async with stream_context as ts:
                 event_bus.publish(ConnectionStatusEvent(
                     status="CONNECTED",
-                    message=f"Conectado a {settings.TRADING_SYMBOL}"
+                    message=f"Conectado a {settings.TRADING_SYMBOL} ({settings.TRADING_TYPE})"
                 ))
-                log.info("WebSocket connected: %s@ticker", symbol_lower)
+                log.info("WebSocket connected: %s@ticker (%s)", symbol_lower, settings.TRADING_TYPE)
 
-                async for msg in ts:
-                    if not self._running:
-                        break
+                while self._running:
+                    msg = await ts.recv()
                     if msg.get("e") == "error":
                         raise Exception(f"WS Error: {msg}")
 
@@ -237,6 +269,213 @@ class BinanceService:
         """Reacciona a cambios de configuración desde la UI."""
         log.info("Settings updated. Restarting BinanceService...")
         await self.restart()
+
+    # ------------------------------------------------------------------
+    # Consulta de símbolos (USDT/USDC) con precios
+    # ------------------------------------------------------------------
+
+    _symbols_cache: list[dict] | None = None
+    _symbols_cache_time: float = 0.0
+
+    async def get_trading_symbols(self) -> list[dict]:
+        """Obtiene símbolos disponibles (USDT/USDC) con precios actuales.
+        Cache de 60 segundos para evitar rate limits."""
+        now = time.time()
+        if self._symbols_cache and (now - self._symbols_cache_time) < 60.0:
+            return self._symbols_cache
+
+        from binance import AsyncClient  # type: ignore
+
+        client = None
+        try:
+            client = await AsyncClient.create(
+                api_key=settings.BINANCE_API_KEY or None,
+                api_secret=settings.BINANCE_API_SECRET or None,
+                testnet=settings.BINANCE_TESTNET,
+            )
+
+            exchange_info = await client.get_exchange_info()
+            all_prices = await client.get_all_tickers()
+            price_map = {t["symbol"]: t["price"] for t in all_prices}
+
+            currency = settings.TRADE_CURRENCY
+            results = []
+            for s in exchange_info["symbols"]:
+                if s["quoteAsset"] == currency and s["status"] == "TRADING":
+                    symbol = s["symbol"]
+                    results.append({
+                        "symbol": symbol,
+                        "base_asset": s["baseAsset"],
+                        "quote_asset": s["quoteAsset"],
+                        "price": price_map.get(symbol, "0.00000000"),
+                    })
+
+            # Ordenar por precio descendente (BTC primero)
+            results.sort(key=lambda x: float(x["price"]), reverse=True)
+
+            self._symbols_cache = results
+            self._symbols_cache_time = now
+
+            event_bus.publish(SymbolsListEvent(symbols=results))
+            log.info("Loaded %d %s symbols from Binance", len(results), currency)
+            return results
+
+        except Exception as exc:
+            log.error("Error fetching symbols: %s", exc)
+            return self._symbols_cache or []
+        finally:
+            if client:
+                try:
+                    await client.close_connection()
+                except Exception:
+                    pass
+
+    async def get_symbol_price(self, symbol: str) -> float:
+        """Obtiene el precio actual de un símbolo específico."""
+        from binance import AsyncClient  # type: ignore
+
+        client = None
+        try:
+            client = await AsyncClient.create(
+                api_key=settings.BINANCE_API_KEY or None,
+                api_secret=settings.BINANCE_API_SECRET or None,
+                testnet=settings.BINANCE_TESTNET,
+            )
+            ticker = await client.get_symbol_ticker(symbol=symbol)
+            return float(ticker.get("price", 0))
+        except Exception as exc:
+            log.error("Error fetching price for %s: %s", symbol, exc)
+            return 0.0
+        finally:
+            if client:
+                try:
+                    await client.close_connection()
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Consulta de saldo (Account Balance)
+    # ------------------------------------------------------------------
+
+    _balance_cache: BalanceUpdateEvent | None = None
+    _balance_cache_time: float = 0.0
+
+    async def get_balance(self, asset: str = "USDT") -> BalanceUpdateEvent:
+        """Consulta el saldo según TRADING_TYPE actual. Cache de 5 segundos."""
+        now = time.time()
+        if self._balance_cache and (now - self._balance_cache_time) < 5.0:
+            return self._balance_cache
+
+        # En PAPER mode o sin API keys, retornar saldo mock
+        if settings.TRADING_MODE == "PAPER" or not settings.has_api_keys():
+            event = BalanceUpdateEvent(
+                asset=asset,
+                trading_type=settings.TRADING_TYPE,
+                free=10000.0,
+                available=10000.0,
+            )
+            self._balance_cache = event
+            self._balance_cache_time = now
+            return event
+
+        from binance import AsyncClient  # type: ignore
+
+        client = None
+        try:
+            client = await AsyncClient.create(
+                api_key=settings.BINANCE_API_KEY,
+                api_secret=settings.BINANCE_API_SECRET,
+                testnet=settings.BINANCE_TESTNET,
+            )
+
+            event = BalanceUpdateEvent(
+                asset=asset,
+                trading_type=settings.TRADING_TYPE,
+                free=0.0,
+            )
+
+            if settings.TRADING_TYPE == "FUTURES":
+                balances = await client.futures_account_balance()
+                entry = next((b for b in balances if b["asset"] == asset), None)
+                if entry:
+                    event.free = float(entry.get("balance", 0))
+                    event.available = float(entry.get("availableBalance", 0))
+                    event.unrealized_pnl = float(entry.get("crossUnPnl", 0))
+
+            elif settings.TRADING_TYPE == "MARGIN":
+                account = await client.get_margin_account()
+                entry = next(
+                    (a for a in account.get("userAssets", []) if a["asset"] == asset),
+                    None,
+                )
+                if entry:
+                    event.free = float(entry.get("free", 0))
+                    event.locked = float(entry.get("locked", 0))
+                    event.borrowed = float(entry.get("borrowed", 0))
+                    event.interest = float(entry.get("interest", 0))
+                event.margin_level = float(account.get("marginLevel", 0))
+
+            else:  # SPOT
+                balance = await client.get_asset_balance(asset=asset)
+                if balance:
+                    event.free = float(balance.get("free", 0))
+                    event.locked = float(balance.get("locked", 0))
+
+            self._balance_cache = event
+            self._balance_cache_time = now
+            return event
+
+        except Exception as exc:
+            log.error("Error fetching balance: %s", exc)
+            return BalanceUpdateEvent(
+                asset=asset,
+                trading_type=settings.TRADING_TYPE,
+                free=0.0,
+            )
+        finally:
+            if client:
+                try:
+                    await client.close_connection()
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Balance auto-refresh loop
+    # ------------------------------------------------------------------
+
+    def _start_balance_loop(self) -> None:
+        """Inicia el loop de auto-refresh de saldo."""
+        self._stop_balance_loop()
+        # 30s en LIVE, 60s en PAPER
+        self._balance_interval = 30.0 if settings.TRADING_MODE == "LIVE" else 60.0
+        self._balance_task = asyncio.create_task(
+            self._balance_loop(), name="balance_loop"
+        )
+        log.info("Balance loop started (interval: %.0fs)", self._balance_interval)
+
+    def _stop_balance_loop(self) -> None:
+        """Detiene el loop de auto-refresh de saldo."""
+        if self._balance_task:
+            self._balance_task.cancel()
+            self._balance_task = None
+
+    async def _balance_loop(self) -> None:
+        """Loop que consulta y publica saldo periódicamente."""
+        try:
+            # Primera consulta inmediata
+            balance = await self.get_balance()
+            event_bus.publish(balance)
+
+            while self._running:
+                await asyncio.sleep(self._balance_interval)
+                if not self._running:
+                    break
+                balance = await self.get_balance()
+                event_bus.publish(balance)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log.error("Balance loop error: %s", exc)
 
 
 # Instancia global singleton

@@ -91,15 +91,15 @@ class MiniChart(ft.Container):
             y = h - ((p - min_p) / price_range) * h + self.PADDING
             return x, y
 
-        shapes: list[cv.Path] = []
+        shapes: list = []
         for i in range(n - 1):
             x1, y1 = to_xy(i, prices[i])
             x2, y2 = to_xy(i + 1, prices[i + 1])
             # Color verde si precio sube, rojo si baja
             color = ft.Colors.GREEN_400 if prices[i + 1] >= prices[i] else ft.Colors.RED_400
             shapes.append(
-                cv.Path(
-                    elements=[cv.MoveTo(x1, y1), cv.LineTo(x2, y2)],
+                cv.Line(
+                    x1=x1, y1=y1, x2=x2, y2=y2,
                     paint=ft.Paint(
                         stroke_width=1.5,
                         style=ft.PaintingStyle.STROKE,

@@ -20,6 +20,18 @@ class Settings:
     # --- Trading ---
     TRADING_SYMBOL: str = os.getenv("TRADING_SYMBOL", "BTCUSDT")
     TRADING_MODE: str = os.getenv("TRADING_MODE", "PAPER")  # "PAPER" | "LIVE"
+    TRADING_TYPE: str = os.getenv("TRADING_TYPE", "SPOT")  # "SPOT" | "FUTURES" | "MARGIN"
+    LEVERAGE: int = int(os.getenv("LEVERAGE", "1"))  # 1x-20x (solo Futures/Margin)
+    ORDER_TYPE: str = os.getenv("ORDER_TYPE", "MARKET")  # "MARKET" | "LIMIT"
+    LIMIT_PRICE: float = float(os.getenv("LIMIT_PRICE", "0"))  # Precio límite (solo LIMIT)
+
+    # --- Parámetros de Operación ---
+    TRADE_AMOUNT: float = float(os.getenv("TRADE_AMOUNT", "10.0"))  # Monto a operar
+    TRADE_CURRENCY: str = os.getenv("TRADE_CURRENCY", "USDT")  # "USDT" | "USDC"
+    STOP_LOSS: float = float(os.getenv("STOP_LOSS", "1.01"))  # Valor del SL
+    STOP_LOSS_TYPE: str = os.getenv("STOP_LOSS_TYPE", "PERCENT")  # "PERCENT" | "USDT"
+    TIMEFRAME: int = int(os.getenv("TIMEFRAME", "1"))  # Temporalidad
+    TIMEFRAME_UNIT: str = os.getenv("TIMEFRAME_UNIT", "MINUTES")  # "MINUTES" | "HOURS"
 
     # --- Estrategia Bot: MA Crossover ---
     BOT_MA_FAST: int = int(os.getenv("BOT_MA_FAST", "7"))
@@ -47,6 +59,16 @@ class Settings:
         self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
         self.TRADING_SYMBOL = os.getenv("TRADING_SYMBOL", "BTCUSDT")
         self.TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
+        self.TRADING_TYPE = os.getenv("TRADING_TYPE", "SPOT")
+        self.LEVERAGE = int(os.getenv("LEVERAGE", "1"))
+        self.ORDER_TYPE = os.getenv("ORDER_TYPE", "MARKET")
+        self.LIMIT_PRICE = float(os.getenv("LIMIT_PRICE", "0"))
+        self.TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "10.0"))
+        self.TRADE_CURRENCY = os.getenv("TRADE_CURRENCY", "USDT")
+        self.STOP_LOSS = float(os.getenv("STOP_LOSS", "1.01"))
+        self.STOP_LOSS_TYPE = os.getenv("STOP_LOSS_TYPE", "PERCENT")
+        self.TIMEFRAME = int(os.getenv("TIMEFRAME", "1"))
+        self.TIMEFRAME_UNIT = os.getenv("TIMEFRAME_UNIT", "MINUTES")
         self.BOT_MA_FAST = int(os.getenv("BOT_MA_FAST", "7"))
         self.BOT_MA_SLOW = int(os.getenv("BOT_MA_SLOW", "25"))
         self.BOT_QUANTITY = float(os.getenv("BOT_QUANTITY", "0.001"))
