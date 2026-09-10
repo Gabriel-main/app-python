@@ -1,5 +1,5 @@
-flet>=0.24.0
-python-binance>=1.0.19
-aiosqlite>=0.20.0
-sqlmodel>=0.0.21
-python-dotenv>=1.0.0
+flet>=0.86.5
+python-binance>=1.0.37
+aiosqlite>=0.21.0
+sqlmodel>=0.0.42
+python-dotenv>=1.2.3
