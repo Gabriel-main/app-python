@@ -166,11 +166,21 @@ class SettingsView(ft.Column):
 
         # --- Layout ---
         self.controls = [
-            ft.Text("Configuración", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-            ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
+            ft.Text(
+                "Configuración",
+                size=22,
+                weight=ft.FontWeight.BOLD,
+                color=ft.Colors.WHITE,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            ft.Container(
+                width=380,
+                content=ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=20),
+            ),
 
             # Modo
             ft.Container(
+                width=380,
                 bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
                 border_radius=14,
                 padding=ft.Padding.all(16),
@@ -188,6 +198,7 @@ class SettingsView(ft.Column):
 
             # Tipo de Trading
             ft.Container(
+                width=380,
                 bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
                 border_radius=14,
                 padding=ft.Padding.all(16),
@@ -213,6 +224,8 @@ class SettingsView(ft.Column):
         ]
 
         self.spacing = 16
+        self.expand = True
+        self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         self.scroll = ft.ScrollMode.AUTO
 
     # ------------------------------------------------------------------

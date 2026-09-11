@@ -324,10 +324,32 @@ class DashboardView(ft.Column):
     def did_mount(self) -> None:
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._sync_badges()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+
+    def _sync_badges(self) -> None:
+        """Sincroniza badges con los valores actuales de settings."""
+        trading_type_colors = {
+            "SPOT": (ft.Colors.BLUE_400, ft.Colors.BLUE_900),
+            "FUTURES": (ft.Colors.PURPLE_400, ft.Colors.PURPLE_900),
+            "MARGIN": (ft.Colors.ORANGE_400, ft.Colors.ORANGE_900),
+        }
+        tt_color, tt_bg = trading_type_colors.get(settings.TRADING_TYPE, (ft.Colors.BLUE_400, ft.Colors.BLUE_900))
+        self._trading_type_badge.content.value = settings.TRADING_TYPE
+        self._trading_type_badge.content.color = tt_color
+        self._trading_type_badge.bgcolor = tt_bg
+        self._trading_type_badge.border = ft.Border.all(1, tt_color)
+        self._trading_type_badge.update()
+
+        mode_color = ft.Colors.AMBER_400 if settings.TRADING_MODE == "PAPER" else ft.Colors.RED_400
+        self._mode_badge.content.value = settings.TRADING_MODE
+        self._mode_badge.content.color = mode_color
+        self._mode_badge.bgcolor = ft.Colors.with_opacity(0.15, mode_color)
+        self._mode_badge.border = ft.Border.all(1, mode_color)
+        self._mode_badge.update()
 
     # ------------------------------------------------------------------
     # Responsive — se llama desde app_layout.on_resize
