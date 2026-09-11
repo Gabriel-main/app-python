@@ -101,6 +101,7 @@ class SettingsView(ft.Column):
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
             visible=settings.ORDER_TYPE == "LIMIT",
+            on_change=lambda e: self._update_save_button_state(),
         )
 
         self._api_key_field = ft.TextField(
@@ -115,6 +116,7 @@ class SettingsView(ft.Column):
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
             visible=settings.TRADING_MODE == "LIVE",
+            on_change=lambda e: self._update_save_button_state(),
         )
 
         self._api_secret_field = ft.TextField(
@@ -129,6 +131,7 @@ class SettingsView(ft.Column):
             color=ft.Colors.WHITE,
             label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
             visible=settings.TRADING_MODE == "LIVE",
+            on_change=lambda e: self._update_save_button_state(),
         )
 
         self._live_warning = ft.Container(
@@ -227,6 +230,31 @@ class SettingsView(ft.Column):
         self.expand = True
         self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         self.scroll = ft.ScrollMode.AUTO
+        self._save_btn.disabled = not self._has_changes()
+
+    # ------------------------------------------------------------------
+    # Detección de cambios
+    # ------------------------------------------------------------------
+    def _has_changes(self) -> bool:
+        """Retorna True si el formulario difiere de la configuración actual."""
+        mode = self._mode_dropdown.value or "PAPER"
+        trading_type = self._trading_type_dropdown.value or "SPOT"
+        leverage = int(self._leverage_dropdown.value or "1")
+        order_type = self._order_type_dropdown.value or "MARKET"
+        limit_price = float(self._limit_price_field.value or "0")
+
+        return (
+            mode != settings.TRADING_MODE
+            or trading_type != settings.TRADING_TYPE
+            or leverage != settings.LEVERAGE
+            or order_type != settings.ORDER_TYPE
+            or (order_type == "LIMIT" and limit_price != settings.LIMIT_PRICE)
+        )
+
+    def _update_save_button_state(self) -> None:
+        """Habilita/deshabilita el botón según si hay cambios."""
+        self._save_btn.disabled = not self._has_changes()
+        self._save_btn.update()
 
     # ------------------------------------------------------------------
     # Handlers
@@ -239,17 +267,20 @@ class SettingsView(ft.Column):
         self._api_key_field.update()
         self._api_secret_field.update()
         self._live_warning.update()
+        self._update_save_button_state()
 
     def _on_trading_type_changed(self, e: ft.ControlEvent) -> None:
         trading_type = e.control.value
         show_leverage = trading_type in ("FUTURES", "MARGIN")
         self._leverage_dropdown.visible = show_leverage
         self._leverage_dropdown.update()
+        self._update_save_button_state()
 
     def _on_order_type_changed(self, e: ft.ControlEvent) -> None:
         is_limit = e.control.value == "LIMIT"
         self._limit_price_field.visible = is_limit
         self._limit_price_field.update()
+        self._update_save_button_state()
 
     def _on_save(self, e: ft.ControlEvent) -> None:
         """Abre modal de confirmación antes de guardar."""

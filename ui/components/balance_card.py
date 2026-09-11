@@ -12,7 +12,7 @@ import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import BalanceUpdateEvent
+from core.events import BalanceUpdateEvent, SettingsUpdatedEvent
 
 
 def _format_amount(value: float) -> str:
@@ -123,16 +123,24 @@ class BalanceCard(ft.Container):
 
     def did_mount(self) -> None:
         event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
+        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
+        event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
-        """Actualiza la card con el nuevo saldo."""
+        """Actualiza valores con datos reales del balance."""
         self._last_update = event.timestamp
-        self._update_badge(event.trading_type)
         self._update_values(event)
         self._update_timestamp()
+        self.update()
+
+    async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
+        """Actualiza badge y labels al cambiar configuración (instantáneo)."""
+        self._update_badge(event.trading_type)
+        self._update_values_for_type(event.trading_type)
+        self._time_text.value = "Conectando..."
         self.update()
 
     def _update_badge(self, trading_type: str) -> None:
@@ -184,6 +192,29 @@ class BalanceCard(ft.Container):
             self._value_1.value = _format_amount(event.free)
             self._label_2.value = "Bloqueado"
             self._value_2.value = _format_amount(event.locked)
+
+    def _update_values_for_type(self, trading_type: str) -> None:
+        """Actualiza los labels según TRADING_TYPE (sin datos numéricos)."""
+        self._label_2.visible = True
+        self._value_2.visible = True
+        self._label_3.visible = False
+        self._value_3.visible = False
+
+        if trading_type == "FUTURES":
+            self._label_1.value = "Wallet"
+            self._value_1.value = "---"
+            self._label_2.value = "Disponible"
+            self._value_2.value = "---"
+        elif trading_type == "MARGIN":
+            self._label_1.value = "Net Asset"
+            self._value_1.value = "---"
+            self._label_2.value = "Prestado"
+            self._value_2.value = "---"
+        else:  # SPOT
+            self._label_1.value = "Disponible"
+            self._value_1.value = "---"
+            self._label_2.value = "Bloqueado"
+            self._value_2.value = "---"
 
     def _update_timestamp(self) -> None:
         """Actualiza el timestamp de la última actualización."""
