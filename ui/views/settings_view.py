@@ -327,8 +327,9 @@ class SettingsView(ft.Column):
         )
 
         self.page.overlay.append(self._confirm_dialog)
-        self._confirm_dialog.open = True
         self.page.update()
+        self._confirm_dialog.open = True
+        self._confirm_dialog.update()
 
     def _apply_changes(self) -> None:
         """Aplica los cambios después de confirmar en el modal."""
@@ -450,10 +451,9 @@ class SettingsView(ft.Column):
         """Cierra el modal de confirmación."""
         if hasattr(self, '_confirm_dialog') and self._confirm_dialog:
             self._confirm_dialog.open = False
-            # Limpiar overlay antes de actualizar
+            self._confirm_dialog.update()
             if self._confirm_dialog in self.page.overlay:
                 self.page.overlay.remove(self._confirm_dialog)
-            self.page.update()
 
     @staticmethod
     def _write_env(mode: str, trading_type: str, leverage: int,
