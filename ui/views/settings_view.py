@@ -269,7 +269,7 @@ class SettingsView(ft.Column):
         # Crear modal
         self._confirm_dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("Confirmar Cambios", color=ft.Colors.WHITE),
+            title=ft.Text("Confirmar Cambios", color=ft.Colors.WHITE, size=15),
             bgcolor=ft.Colors.GREY_900,
             content=ft.Column(
                 controls=[
@@ -285,6 +285,7 @@ class SettingsView(ft.Column):
                 ],
                 spacing=0,
                 width=300,
+                height=150,
             ),
             actions=[
                 ft.TextButton(
@@ -301,6 +302,7 @@ class SettingsView(ft.Column):
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            inset_padding=ft.Padding.all(12),
         )
 
         self.page.overlay.append(self._confirm_dialog)
@@ -309,7 +311,19 @@ class SettingsView(ft.Column):
 
     def _apply_changes(self) -> None:
         """Aplica los cambios después de confirmar en el modal."""
-        self._close_dialog()
+        # Mostrar spinner mientras se procesa
+        self._confirm_dialog.content = ft.Column(
+            controls=[
+                ft.ProgressRing(width=28, height=28, stroke_width=3),
+                ft.Container(height=10),
+                ft.Text("Aplicando cambios...", color=ft.Colors.WHITE, size=14),
+                ft.Text("El servicio se reconectará.", color=ft.Colors.AMBER_400, size=11),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            width=250,
+        )
+        self._confirm_dialog.actions = []
+        self._confirm_dialog.update()
 
         symbol = settings.TRADING_SYMBOL  # Se toma del Dashboard SymbolPicker
         mode = self._mode_dropdown.value or "PAPER"
@@ -345,6 +359,7 @@ class SettingsView(ft.Column):
             api_secret=api_secret,
         ))
 
+        self._close_dialog()
         self._feedback_text.value = "✅ Configuración guardada. Reconectando..."
         self._feedback_text.color = ft.Colors.GREEN_400
         self._feedback_text.update()

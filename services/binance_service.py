@@ -115,6 +115,8 @@ class BinanceService:
         await self.stop()
         self._running = True
         self._retry_count = 0
+        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._start_balance_loop()
         self._stream_task = asyncio.create_task(
             self._run_with_reconnect(), name="binance_stream"
         )

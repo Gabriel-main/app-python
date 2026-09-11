@@ -73,7 +73,7 @@ valida separación de capas y aplica reglas de reactividad.
 | `OrderExecutedEvent` | `BotEngine` | `OrdersView` |
 | `ConnectionStatusEvent` | `BinanceService` | `ConnectionIndicator` |
 | `BotStateChangedEvent` | `DashboardView` (botón) | `BotEngine` |
-| `SettingsUpdatedEvent` | `SettingsView` | `BinanceService`, `BotEngine` |
+| `SettingsUpdatedEvent` | `SettingsView` | `BinanceService`, `BotEngine`, `DashboardView` |
 
 ---
 
@@ -86,7 +86,7 @@ Binance WS → BinanceService → PriceTickEvent → EventBus
                                                  ├─→ PriceTicker (UI)
                                                  └─→ MiniChart (UI)
 
-SettingsView [Guardar] → SettingsUpdatedEvent → BinanceService (restart) + BotEngine (reload)
+SettingsView [Guardar] → SettingsUpdatedEvent → BinanceService (restart) + BotEngine (reload) + DashboardView (badges)
 DashboardView [Toggle] → BotStateChangedEvent → BotEngine (pause/resume)
 ```
 
