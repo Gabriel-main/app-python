@@ -1,6 +1,8 @@
 """
 Trading Bot — Settings & Configuración
-Carga variables de entorno desde .env con python-dotenv.
+
+Sensibles (BINANCE_API_KEY, etc.) → .env
+Trading config (modo, tipo, etc.) → Base de Datos
 """
 import os
 from pathlib import Path
@@ -12,31 +14,10 @@ load_dotenv(BASE_DIR / ".env")
 
 
 class Settings:
-    # --- Binance API ---
+    # --- Sensibles (desde .env) ---
     BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
     BINANCE_API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
     BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
-
-    # --- Trading ---
-    TRADING_SYMBOL: str = os.getenv("TRADING_SYMBOL", "BTCUSDT")
-    TRADING_MODE: str = os.getenv("TRADING_MODE", "PAPER")  # "PAPER" | "LIVE"
-    TRADING_TYPE: str = os.getenv("TRADING_TYPE", "SPOT")  # "SPOT" | "FUTURES" | "MARGIN"
-    LEVERAGE: int = int(os.getenv("LEVERAGE", "1"))  # 1x-20x (solo Futures/Margin)
-    ORDER_TYPE: str = os.getenv("ORDER_TYPE", "MARKET")  # "MARKET" | "LIMIT"
-    LIMIT_PRICE: float = float(os.getenv("LIMIT_PRICE", "0"))  # Precio límite (solo LIMIT)
-
-    # --- Parámetros de Operación ---
-    TRADE_AMOUNT: float = float(os.getenv("TRADE_AMOUNT", "10.0"))  # Monto a operar
-    TRADE_CURRENCY: str = os.getenv("TRADE_CURRENCY", "USDT")  # "USDT" | "USDC"
-    STOP_LOSS: float = float(os.getenv("STOP_LOSS", "1.01"))  # Valor del SL
-    STOP_LOSS_TYPE: str = os.getenv("STOP_LOSS_TYPE", "PERCENT")  # "PERCENT" | "USDT"
-    TIMEFRAME: int = int(os.getenv("TIMEFRAME", "1"))  # Temporalidad
-    TIMEFRAME_UNIT: str = os.getenv("TIMEFRAME_UNIT", "MINUTES")  # "MINUTES" | "HOURS"
-
-    # --- Estrategia Bot: MA Crossover ---
-    BOT_MA_FAST: int = int(os.getenv("BOT_MA_FAST", "7"))
-    BOT_MA_SLOW: int = int(os.getenv("BOT_MA_SLOW", "25"))
-    BOT_QUANTITY: float = float(os.getenv("BOT_QUANTITY", "0.001"))  # BTC por orden
 
     # --- Base de Datos ---
     DB_PATH: str = os.getenv("DB_PATH", str(BASE_DIR / "trading_bot.db"))
@@ -44,34 +25,79 @@ class Settings:
     # --- App ---
     APP_TITLE: str = "CryptoBot"
     APP_THEME: str = "dark"
-    PRICE_BUFFER_SIZE: int = 60   # ticks en memoria para el mini-chart
+    PRICE_BUFFER_SIZE: int = 60
     RECONNECT_MAX_RETRIES: int = 10
-    RECONNECT_BASE_DELAY: float = 2.0  # segundos, backoff exponencial
+    RECONNECT_BASE_DELAY: float = 2.0
+
+    # --- Trading (se carga desde DB en load_from_db()) ---
+    TRADING_SYMBOL: str = "BTCUSDT"
+    TRADING_MODE: str = "PAPER"
+    TRADING_TYPE: str = "SPOT"
+    LEVERAGE: int = 1
+    ORDER_TYPE: str = "MARKET"
+    LIMIT_PRICE: float = 0.0
+    TRADE_AMOUNT: float = 10.0
+    TRADE_CURRENCY: str = "USDT"
+    STOP_LOSS: float = 1.01
+    STOP_LOSS_TYPE: str = "PERCENT"
+    TIMEFRAME: int = 1
+    TIMEFRAME_UNIT: str = "MINUTES"
+    BOT_MA_FAST: int = 7
+    BOT_MA_SLOW: int = 25
+    BOT_QUANTITY: float = 0.001
 
     def has_api_keys(self) -> bool:
         """Devuelve True si las API Keys están configuradas."""
         return bool(self.BINANCE_API_KEY and self.BINANCE_API_SECRET)
 
     def reload_from_env(self) -> None:
-        """Recarga la configuración desde el entorno (útil después de guardar desde UI)."""
+        """Recarga SOLO variables sensibles desde .env."""
         load_dotenv(BASE_DIR / ".env", override=True)
         self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
         self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
-        self.TRADING_SYMBOL = os.getenv("TRADING_SYMBOL", "BTCUSDT")
-        self.TRADING_MODE = os.getenv("TRADING_MODE", "PAPER")
-        self.TRADING_TYPE = os.getenv("TRADING_TYPE", "SPOT")
-        self.LEVERAGE = int(os.getenv("LEVERAGE", "1"))
-        self.ORDER_TYPE = os.getenv("ORDER_TYPE", "MARKET")
-        self.LIMIT_PRICE = float(os.getenv("LIMIT_PRICE", "0"))
-        self.TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "10.0"))
-        self.TRADE_CURRENCY = os.getenv("TRADE_CURRENCY", "USDT")
-        self.STOP_LOSS = float(os.getenv("STOP_LOSS", "1.01"))
-        self.STOP_LOSS_TYPE = os.getenv("STOP_LOSS_TYPE", "PERCENT")
-        self.TIMEFRAME = int(os.getenv("TIMEFRAME", "1"))
-        self.TIMEFRAME_UNIT = os.getenv("TIMEFRAME_UNIT", "MINUTES")
-        self.BOT_MA_FAST = int(os.getenv("BOT_MA_FAST", "7"))
-        self.BOT_MA_SLOW = int(os.getenv("BOT_MA_SLOW", "25"))
-        self.BOT_QUANTITY = float(os.getenv("BOT_QUANTITY", "0.001"))
+        self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+
+    async def load_from_db(self) -> None:
+        """Carga configuración de trading desde la base de datos."""
+        from services.config_service import config_service
+        config = await config_service.load()
+
+        self.TRADING_SYMBOL = config.trading_symbol
+        self.TRADING_MODE = config.trading_mode
+        self.TRADING_TYPE = config.trading_type
+        self.LEVERAGE = config.leverage
+        self.ORDER_TYPE = config.order_type
+        self.LIMIT_PRICE = config.limit_price
+        self.TRADE_AMOUNT = config.trade_amount
+        self.TRADE_CURRENCY = config.trade_currency
+        self.STOP_LOSS = config.stop_loss
+        self.STOP_LOSS_TYPE = config.stop_loss_type
+        self.TIMEFRAME = config.timeframe
+        self.TIMEFRAME_UNIT = config.timeframe_unit
+        self.BOT_MA_FAST = config.bot_ma_fast
+        self.BOT_MA_SLOW = config.bot_ma_slow
+        self.BOT_QUANTITY = config.bot_quantity
+
+    async def save_to_db(self) -> None:
+        """Guarda la configuración actual de trading en la base de datos."""
+        from services.config_service import config_service
+        await config_service.update(
+            trading_symbol=self.TRADING_SYMBOL,
+            trading_mode=self.TRADING_MODE,
+            trading_type=self.TRADING_TYPE,
+            leverage=self.LEVERAGE,
+            order_type=self.ORDER_TYPE,
+            limit_price=self.LIMIT_PRICE,
+            trade_amount=self.TRADE_AMOUNT,
+            trade_currency=self.TRADE_CURRENCY,
+            stop_loss=self.STOP_LOSS,
+            stop_loss_type=self.STOP_LOSS_TYPE,
+            timeframe=self.TIMEFRAME,
+            timeframe_unit=self.TIMEFRAME_UNIT,
+            bot_ma_fast=self.BOT_MA_FAST,
+            bot_ma_slow=self.BOT_MA_SLOW,
+            bot_quantity=self.BOT_QUANTITY,
+        )
 
 
 # Instancia global singleton

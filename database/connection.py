@@ -17,7 +17,7 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from config.settings import settings
-from database.models import Order, PriceTick  # noqa: F401 — importar para que SQLModel registre las tablas
+from database.models import Order, PriceTick, TradingConfig  # noqa: F401 — importar para que SQLModel registre las tablas
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +56,15 @@ async def create_db_and_tables() -> None:
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[SQLModelAsyncSession, None]:
-    """Provee una sesión async de SQLModel para operaciones de DB."""
+    """Provee una sesión async de SQLModel para operaciones de DB.
+    
+    NOTA: No hace auto-commit. Cada servicio debe llamar session.commit()
+    explícitamente antes de retornar objetos de la sesión.
+    """
     engine = get_engine()
     async with SQLModelAsyncSession(engine) as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise

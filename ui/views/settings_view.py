@@ -410,14 +410,28 @@ class SettingsView(ft.Column):
             api_key = self._api_key_field.value or ""
             api_secret = self._api_secret_field.value or ""
 
-            # Actualizar .env en disco
-            self._write_env(mode, trading_type, leverage, order_type, limit_price,
-                            api_key, api_secret)
+            # 1. Guardar solo variables sensibles en .env
+            self._write_env_sensitive(api_key, api_secret)
 
-            # Recargar settings en memoria
-            settings.reload_from_env()
+            # 2. Guardar configuración de trading en DB (async)
+            import asyncio
+            asyncio.create_task(self._save_config_to_db(
+                mode=mode,
+                trading_type=trading_type,
+                leverage=leverage,
+                order_type=order_type,
+                limit_price=limit_price,
+            ))
 
-            # Publicar evento para que los servicios reaccionen
+            # 3. Actualizar settings en memoria
+            settings.reload_from_env()  # Solo sensibles
+            settings.TRADING_MODE = mode
+            settings.TRADING_TYPE = trading_type
+            settings.LEVERAGE = leverage
+            settings.ORDER_TYPE = order_type
+            settings.LIMIT_PRICE = limit_price
+
+            # 4. Publicar evento para que los servicios reaccionen
             event_bus.publish(SettingsUpdatedEvent(
                 symbol=symbol,
                 mode=mode,
@@ -453,6 +467,19 @@ class SettingsView(ft.Column):
         finally:
             self._close_dialog()
             self._feedback_text.update()
+
+    async def _save_config_to_db(self, mode: str, trading_type: str,
+                                  leverage: int, order_type: str,
+                                  limit_price: float) -> None:
+        """Guarda la configuración de trading en la base de datos."""
+        from services.config_service import config_service
+        await config_service.update(
+            trading_mode=mode,
+            trading_type=trading_type,
+            leverage=leverage,
+            order_type=order_type,
+            limit_price=limit_price,
+        )
 
     def _restore_form_fields(self, form_snapshot: dict) -> None:
         """Restaura los campos del formulario a valores anteriores."""
@@ -509,6 +536,27 @@ class SettingsView(ft.Column):
         lines = set_var(lines, "LEVERAGE", str(leverage))
         lines = set_var(lines, "ORDER_TYPE", order_type)
         lines = set_var(lines, "LIMIT_PRICE", str(limit_price))
+        lines = set_var(lines, "BINANCE_API_KEY", api_key)
+        lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
+
+        env_path.write_text("\n".join(lines), encoding="utf-8")
+
+    @staticmethod
+    def _write_env_sensitive(api_key: str, api_secret: str) -> None:
+        """Escribe SOLO variables sensibles en .env."""
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        lines = []
+        if env_path.exists():
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+
+        def set_var(lines: list[str], key: str, val: str) -> list[str]:
+            for i, line in enumerate(lines):
+                if line.startswith(f"{key}="):
+                    lines[i] = f"{key}={val}"
+                    return lines
+            lines.append(f"{key}={val}")
+            return lines
+
         lines = set_var(lines, "BINANCE_API_KEY", api_key)
         lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
 

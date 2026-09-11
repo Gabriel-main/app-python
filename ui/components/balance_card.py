@@ -132,15 +132,17 @@ class BalanceCard(ft.Container):
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         """Actualiza valores con datos reales del balance."""
         self._last_update = event.timestamp
+        self._loading.visible = False
         self._update_values(event)
         self._update_timestamp()
         self.update()
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
-        """Actualiza badge y labels al cambiar configuración (instantáneo)."""
+        """Actualiza badge, labels y muestra indicador de carga."""
         self._update_badge(event.trading_type)
         self._update_values_for_type(event.trading_type)
-        self._time_text.value = "Conectando..."
+        self._loading.visible = True
+        self._time_text.value = f"Cargando saldo de {event.trading_type}..."
         self.update()
 
     def _update_badge(self, trading_type: str) -> None:

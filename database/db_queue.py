@@ -181,6 +181,7 @@ class DBQueueWorker:
                     timestamp=event.timestamp,
                 )
                 session.add(tick)
+                await session.commit()
         except Exception as exc:
             log.error("Failed to save tick: %s", exc)
 
@@ -201,6 +202,7 @@ class DBQueueWorker:
                     timestamp=event.timestamp,
                 )
                 session.add(order)
+                await session.commit()
         except Exception as exc:
             log.error("Failed to save order: %s", exc)
 
@@ -239,6 +241,7 @@ class DBQueueWorker:
                             created_at=op.timestamp,
                         )
                         session.add(new_op)
+                await session.commit()
         except Exception as exc:
             log.error("Failed to save operation update: %s", exc)
 
@@ -276,6 +279,7 @@ class DBQueueWorker:
                         status="OPEN",
                     )
                     session.add(new_pos)
+                await session.commit()
         except Exception as exc:
             log.error("Failed to save position update: %s", exc)
 

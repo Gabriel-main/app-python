@@ -11,6 +11,29 @@ from sqlmodel import Field, SQLModel
 import time
 
 
+class TradingConfig(SQLModel, table=True):
+    """Configuración de trading persistida en SQLite."""
+    __tablename__ = "trading_config"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    trading_symbol: str = "BTCUSDT"
+    trading_mode: str = "PAPER"           # "PAPER" | "LIVE"
+    trading_type: str = "SPOT"            # "SPOT" | "FUTURES" | "MARGIN"
+    leverage: int = 1
+    order_type: str = "MARKET"            # "MARKET" | "LIMIT"
+    limit_price: float = 0.0
+    trade_amount: float = 10.0
+    trade_currency: str = "USDT"          # "USDT" | "USDC"
+    stop_loss: float = 1.01
+    stop_loss_type: str = "PERCENT"       # "PERCENT" | "USDT"
+    timeframe: int = 1
+    timeframe_unit: str = "MINUTES"       # "MINUTES" | "HOURS"
+    bot_ma_fast: int = 7
+    bot_ma_slow: int = 25
+    bot_quantity: float = 0.001
+    updated_at: float = Field(default_factory=time.time)
+
+
 class PriceTick(SQLModel, table=True):
     """Registro de un tick de precio recibido del WebSocket."""
     __tablename__ = "price_ticks"

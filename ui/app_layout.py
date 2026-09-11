@@ -27,6 +27,7 @@ from database.connection import create_db_and_tables
 from database.db_queue import db_queue
 from services.binance_service import binance_service
 from services.bot_engine import bot_engine
+from services.config_service import config_service
 from ui.views.dashboard_view import DashboardView
 from ui.views.orders_view import OrdersView
 from ui.views.settings_view import SettingsView
@@ -146,6 +147,8 @@ async def main(page: ft.Page) -> None:
     # Inicialización de servicios (en orden)
     # ------------------------------------------------------------------
     await create_db_and_tables()
+    await config_service.init_from_env()  # Init DB con defaults de .env (primer inicio)
+    await settings.load_from_db()         # Cargar config desde DB
     await event_bus.start()
     await db_queue.start()
     await bot_engine.start()

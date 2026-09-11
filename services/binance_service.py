@@ -113,6 +113,8 @@ class BinanceService:
     async def restart(self) -> None:
         """Reinicia el servicio (usado tras cambio de configuración)."""
         await self.stop()
+        self._balance_cache = None
+        self._balance_cache_time = 0.0
         self._running = True
         self._retry_count = 0
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
