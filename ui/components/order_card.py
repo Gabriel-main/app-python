@@ -61,7 +61,7 @@ def OrderCard(order: dict) -> ft.Card:
                                 color=ft.Colors.WHITE,
                             ),
                             ft.Text(
-                                f"${order.get('price', 0):,.2f}  ×  {order.get('quantity', 0):.4f}",
+                                f"${float(order.get('price') or 0):,.2f}  ×  {float(order.get('quantity') or 0):.4f}",
                                 size=11,
                                 color=ft.Colors.BLUE_GREY_300,
                             ),

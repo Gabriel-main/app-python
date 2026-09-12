@@ -3,6 +3,7 @@ BotToggle — Botón ON/OFF del bot de trading.
 
 Extraído de DashboardView para aplicar SRP.
 Publica BotStateChangedEvent al hacer click.
+Suscribite a BotStateChangedEvent para sincronización bidireccional.
 """
 from __future__ import annotations
 
@@ -30,6 +31,18 @@ class BotToggle(ft.FilledButton):
             padding=ft.Padding(left=20, right=20, top=16, bottom=16),
         )
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    def did_mount(self) -> None:
+        event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
+
+    def will_unmount(self) -> None:
+        event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
+
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
     def _on_click(self, e: ft.ControlEvent) -> None:
         self._active = not self._active
         event_bus.publish(
@@ -40,6 +53,15 @@ class BotToggle(ft.FilledButton):
         )
         self._update_appearance()
 
+    async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
+        """Sincroniza estado si el bot se detiene/inicia externamente."""
+        if self._active != event.is_running:
+            self._active = event.is_running
+            self._update_appearance()
+
+    # ------------------------------------------------------------------
+    # UI Update
+    # ------------------------------------------------------------------
     def _update_appearance(self) -> None:
         if self._active:
             self.content = "⏸  Detener Operaciones"
@@ -54,6 +76,15 @@ class BotToggle(ft.FilledButton):
         except RuntimeError:
             pass
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     @property
     def is_active(self) -> bool:
         return self._active
+
+    def set_active(self, active: bool) -> None:
+        """Actualiza estado desde fuera (ej: al cargar config guardada)."""
+        if self._active != active:
+            self._active = active
+            self._update_appearance()

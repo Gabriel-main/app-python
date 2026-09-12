@@ -102,11 +102,14 @@ class BotEngine:
         if self._running:
             return
         self._running = True
-        self._active = True
+        self._active = False
 
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+
+        # Publicar estado inicial después de que la UI se suscriba
+        asyncio.create_task(self._publish_initial_state(), name="initial_state")
 
         log.info(
             "BotEngine started | Mode: %s | Type: %s | SL: %s %s | TF: %d %s",
@@ -125,6 +128,14 @@ class BotEngine:
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
         await self._close_client()
         log.info("BotEngine stopped")
+
+    async def _publish_initial_state(self) -> None:
+        """Publica el estado inicial del bot después de que la UI se suscriba."""
+        await asyncio.sleep(0.1)
+        event_bus.publish(BotStateChangedEvent(
+            is_running=self._active,
+            mode=settings.TRADING_MODE,
+        ))
 
     # ------------------------------------------------------------------
     # Handlers de eventos
@@ -149,6 +160,12 @@ class BotEngine:
 
         # Actualizar trailing stop para operaciones activas
         self._update_trailing_stop(event.price)
+
+        # Insertar nuevas PENDING si se cumplen condiciones del diagrama
+        pa = event.price
+        sl_dist = self._calculate_sl_distance(pa)
+        quantity = self._calculate_quantity(pa)
+        self._insert_pending_if_needed(pa, sl_dist, quantity)
 
         # Publicar PositionUpdateEvent para operaciones activas
         self._publish_position_updates(event.price)
@@ -257,30 +274,12 @@ class BotEngine:
             log.warning("No price available yet. Waiting for first tick...")
             return
 
-        pa = self._current_price  # Precio de apertura
+        pa = self._current_price
         sl_dist = self._calculate_sl_distance(pa)
         quantity = self._calculate_quantity(pa)
 
-        # OC(a) — Compra Activa: Pe = Pa + SL, PSL = Pa - SL
-        buy_op = TradingOperation(
-            side="BUY",
-            state="ACTIVE",
-            entry_price=pa + sl_dist,
-            stop_loss=pa - sl_dist,
-            quantity=quantity,
-            order_id=f"OC-{uuid.uuid4().hex[:8].upper()}",
-        )
-
-        # OV(p) — Venta Pendiente: Pe = Pa - SL, PSL = Pa + SL
-        sell_op = TradingOperation(
-            side="SELL",
-            state="PENDING",
-            entry_price=pa - sl_dist,
-            stop_loss=pa + sl_dist,
-            quantity=quantity,
-            order_id=f"OV-{uuid.uuid4().hex[:8].upper()}",
-        )
-
+        buy_op = self._create_operation("BUY", "ACTIVE", pa, sl_dist, quantity)
+        sell_op = self._create_operation("SELL", "PENDING", pa, sl_dist, quantity)
         self._operations = [buy_op, sell_op]
 
         log.info(
@@ -291,13 +290,8 @@ class BotEngine:
             sell_op.entry_price, sell_op.stop_loss,
         )
 
-        # Ejecutar órdenes iniciales
         await self._execute_initial_orders()
-
-        # Publicar estado
         self._publish_update()
-
-        # Iniciar timer de temporalidad
         self._start_timeframe_timer()
 
     async def _stop_trading(self) -> None:
@@ -328,6 +322,68 @@ class BotEngine:
         if pa <= 0:
             return 0.0
         return settings.TRADE_AMOUNT / pa
+
+    # ------------------------------------------------------------------
+    # Helpers de operaciones (SRP + DRY)
+    # ------------------------------------------------------------------
+
+    def _create_operation(
+        self,
+        side: Literal["BUY", "SELL"],
+        state: Literal["ACTIVE", "PENDING"],
+        pa: float,
+        sl_dist: float,
+        quantity: float,
+    ) -> TradingOperation:
+        """Crea una operación con los parámetros según el modelo dual OC/OV."""
+        prefix = "OC" if side == "BUY" else "OV"
+
+        if side == "BUY":
+            entry_price = pa + sl_dist  # Pe = Pa + SL
+            stop_loss = pa - sl_dist    # PSL = Pa - SL
+        else:
+            entry_price = pa - sl_dist  # Pe = Pa - SL
+            stop_loss = pa + sl_dist    # PSL = Pa + SL
+
+        return TradingOperation(
+            side=side,
+            state=state,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            quantity=quantity,
+            order_id=f"{prefix}-{uuid.uuid4().hex[:8].upper()}",
+        )
+
+    def _should_insert_pending(self, op: TradingOperation, pa: float) -> bool:
+        """Evalúa si se debe insertar una nueva operación PENDING según el diagrama.
+        
+        Condiciones:
+        - BUY: Si SL(OC(a)) > Pa → Insertar OC(p)
+        - SELL: Si SL(OV(a)) < Pa → Insertar OV(p)
+        """
+        if op.state != "ACTIVE":
+            return False
+        if op.side == "BUY" and op.stop_loss > pa:
+            return True
+        if op.side == "SELL" and op.stop_loss < pa:
+            return True
+        return False
+
+    def _insert_pending_if_needed(self, pa: float, sl_dist: float, quantity: float) -> None:
+        """Inserta nuevas operaciones PENDING si se cumplen las condiciones del diagrama.
+        
+        Solo se inserta si no existe ya una PENDING del mismo lado.
+        """
+        pending_sides = {op.side for op in self._operations if op.state == "PENDING"}
+
+        for op in self._operations:
+            if op.state == "ACTIVE" and self._should_insert_pending(op, pa):
+                complement_side = "SELL" if op.side == "BUY" else "BUY"
+                if complement_side not in pending_sides:
+                    new_op = self._create_operation(complement_side, "PENDING", pa, sl_dist, quantity)
+                    self._operations.append(new_op)
+                    pending_sides.add(complement_side)
+                    log.info("Inserted PENDING %s due to SL condition", complement_side)
 
     # ------------------------------------------------------------------
     # Timer de temporalidad
@@ -372,7 +428,13 @@ class BotEngine:
             pass
 
     async def _on_timeframe_tick(self) -> None:
-        """Se ejecuta cuando expira la temporalidad."""
+        """Se ejecuta cuando expira la temporalidad.
+        
+        Flujo según diagrama:
+        1. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
+        2. Eliminar TODAS las operaciones PENDING
+        3. Crear NUEVA operación PENDING con datos actualizados
+        """
         if not self._operations:
             return
 
@@ -382,57 +444,52 @@ class BotEngine:
 
         log.info("Timeframe tick | Pa=%.4f | Operations: %d", pa, len(self._operations))
 
-        new_operations: list[TradingOperation] = []
-
+        # 1. Encontrar la operación ACTIVE
+        active_op = None
         for op in self._operations:
             if op.state == "ACTIVE":
-                # Verificar si la operación activa sigue válida
-                if op.side == "BUY":
-                    # Si el SL se movió hacia arriba (trailing stop), la operación pasó
-                    if op.stop_loss > op.best_sl:
-                        op.state = "PAST"
-                        log.info("BUY operation PAST: SL moved to %.4f", op.stop_loss)
-                    else:
-                        # Operación sigue activa, crear nueva pendiente
-                        new_operations.append(TradingOperation(
-                            side="SELL",
-                            state="PENDING",
-                            entry_price=pa - sl_dist,
-                            stop_loss=pa + sl_dist,
-                            quantity=quantity,
-                            order_id=f"OV-{uuid.uuid4().hex[:8].upper()}",
-                        ))
-                elif op.side == "SELL":
-                    # Si el SL se movió hacia abajo, la operación pasó
-                    if op.stop_loss < op.best_sl:
-                        op.state = "PAST"
-                        log.info("SELL operation PAST: SL moved to %.4f", op.stop_loss)
-                    else:
-                        new_operations.append(TradingOperation(
-                            side="BUY",
-                            state="PENDING",
-                            entry_price=pa + sl_dist,
-                            stop_loss=pa - sl_dist,
-                            quantity=quantity,
-                            order_id=f"OC-{uuid.uuid4().hex[:8].upper()}",
-                        ))
+                active_op = op
+                break
 
-            elif op.state == "PENDING":
-                # Pendiente se convierte en activa
-                op.state = "ACTIVE"
-                op.entry_price = pa + sl_dist if op.side == "BUY" else pa - sl_dist
-                op.stop_loss = pa - sl_dist if op.side == "BUY" else pa + sl_dist
-                op.best_sl = op.stop_loss
-                op.quantity = quantity
-                log.info("PENDING -> ACTIVE: %s @ %.4f SL=%.4f",
-                         op.side, op.entry_price, op.stop_loss)
+        if active_op is None:
+            log.warning("No ACTIVE operation found during timeframe tick")
+            return
 
-        # Limpiar operaciones pasadas
-        self._operations = [op for op in self._operations if op.state != "PAST"]
-        self._operations.extend(new_operations)
+        # 2. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
+        self._update_sl_on_tick(active_op, pa, sl_dist)
 
-        # Publicar actualización
+        # 3. Eliminar TODAS las operaciones PENDING
+        self._operations = [op for op in self._operations if op.state != "PENDING"]
+
+        # 4. Crear NUEVA operación PENDING con datos actualizados
+        new_pending_side = "SELL" if active_op.side == "BUY" else "BUY"
+        new_pending = self._create_operation(new_pending_side, "PENDING", pa, sl_dist, quantity)
+        self._operations.append(new_pending)
+
+        log.info("Timeframe update: ACTIVE=%s, NEW PENDING=%s",
+                 active_op.order_id, new_pending.order_id)
+
         self._publish_update()
+
+    def _update_sl_on_tick(self, op: TradingOperation, pa: float, sl_dist: float) -> None:
+        """Actualiza el SL de la operación ACTIVE según condiciones del diagrama.
+        
+        Condiciones:
+        - C (Compra): SLa < SLp → SL se movió favorablemente hacia abajo
+        - V (Venta): SLa > SLp → SL se movió favorablemente hacia arriba
+        """
+        if op.side == "BUY":
+            new_sl = pa - sl_dist
+            if new_sl < op.stop_loss:
+                op.best_sl = min(op.best_sl, new_sl)
+                op.stop_loss = new_sl
+                log.info("BUY SL updated: %.4f (best=%.4f)", op.stop_loss, op.best_sl)
+        else:
+            new_sl = pa + sl_dist
+            if new_sl > op.stop_loss:
+                op.best_sl = max(op.best_sl, new_sl)
+                op.stop_loss = new_sl
+                log.info("SELL SL updated: %.4f (best=%.4f)", op.stop_loss, op.best_sl)
 
     # ------------------------------------------------------------------
     # Trailing stop
@@ -505,6 +562,8 @@ class BotEngine:
 
         event_bus.publish(order_event)
         db_queue.enqueue_order(order_event)
+        op.state = "PAST"
+        log.info("SL executed, operation marked PAST: %s", op.order_id)
 
     # ------------------------------------------------------------------
     # Ejecución de órdenes iniciales

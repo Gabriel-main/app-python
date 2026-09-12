@@ -29,6 +29,7 @@ from database.db_queue import db_queue
 from services.binance_service import binance_service
 from services.bot_engine import bot_engine
 from services.config_service import config_service
+from repositories.order_repository import SQLOrderRepository
 from ui.views.dashboard_view import DashboardView
 from ui.views.orders_view import OrdersView
 from ui.views.settings_view import SettingsView
@@ -59,7 +60,7 @@ async def main(page: ft.Page) -> None:
     # Vistas
     # ------------------------------------------------------------------
     dashboard = DashboardView()
-    orders = OrdersView()
+    orders = OrdersView(order_repository=SQLOrderRepository())
     settings_view = SettingsView()
 
     views = [dashboard, orders, settings_view]

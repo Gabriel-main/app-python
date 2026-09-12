@@ -18,6 +18,22 @@ from ui.components.symbol_picker import SymbolPicker
 
 
 # ---------------------------------------------------------------------------
+# Helper: Bloqueo de campos (DRY)
+# ---------------------------------------------------------------------------
+def _set_fields_disabled(section: ft.Container, disabled: bool) -> None:
+    """Deshabilita/habilita todos los campos editables de una sección."""
+    def _walk(control):
+        if hasattr(control, 'disabled'):
+            control.disabled = disabled
+        if hasattr(control, 'controls'):
+            for child in control.controls:
+                _walk(child)
+        if hasattr(control, 'content') and control.content:
+            _walk(control.content)
+    _walk(section)
+
+
+# ---------------------------------------------------------------------------
 # DTO
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -211,6 +227,14 @@ class TradingModeSection(ft.Container):
         self._api_secret_field.visible = is_live
         self._live_warning.visible = is_live
 
+    def set_disabled(self, disabled: bool) -> None:
+        """Bloquea/desbloquea los campos de esta sección."""
+        _set_fields_disabled(self, disabled)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Section: Trading Type
@@ -324,6 +348,14 @@ class TradingTypeSection(ft.Container):
         self._leverage_dropdown.visible = show_leverage
         is_limit = form_snapshot["order_type"] == "LIMIT"
         self._limit_price_field.visible = is_limit
+
+    def set_disabled(self, disabled: bool) -> None:
+        """Bloquea/desbloquea los campos de esta sección."""
+        _set_fields_disabled(self, disabled)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +495,14 @@ class OperationParamsSection(ft.Container):
         self._sl_type_dropdown.value = form_snapshot["sl_type"]
         self._timeframe_field.value = str(form_snapshot["timeframe"])
         self._timeframe_unit_dropdown.value = form_snapshot["tf_unit"]
+
+    def set_disabled(self, disabled: bool) -> None:
+        """Bloquea/desbloquea los campos de esta sección."""
+        _set_fields_disabled(self, disabled)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -38,10 +38,10 @@ class BotStatusBar(ft.Container):
         self._bot_status_dot = ft.Container(
             width=8, height=8,
             border_radius=4,
-            bgcolor=ft.Colors.GREEN_400,
+            bgcolor=ft.Colors.GREY_600,
             animate=ft.Animation(800, ft.AnimationCurve.EASE_IN_OUT),
         )
-        self._bot_label = ft.Text("BOT ACTIVO", size=10, color=ft.Colors.GREEN_400)
+        self._bot_label = ft.Text("BOT PAUSADO", size=10, color=ft.Colors.GREY_600)
 
         self.content = ft.Container(
             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),

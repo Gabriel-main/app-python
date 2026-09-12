@@ -16,7 +16,7 @@ import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import NavigateToEvent, SettingsUpdatedEvent
+from core.events import BotStateChangedEvent, NavigateToEvent, SettingsUpdatedEvent
 from services.settings_persistence import EnvSettingsPersistence
 from ui.components.settings_sections import (
     ConfirmDialogHelper,
@@ -33,6 +33,8 @@ class SettingsView(ft.Column):
     def __init__(self, persistence=None, symbol_repository=None) -> None:
         super().__init__()
         self._persistence = persistence or EnvSettingsPersistence()
+        self._bot_active: bool = False
+        self._page: ft.Page | None = None
 
         # --- Secciones ---
         self._mode_section = TradingModeSection(on_change=self._update_save_button_state)
@@ -75,6 +77,33 @@ class SettingsView(ft.Column):
         self._save_btn.disabled = not self._has_changes()
 
         self._confirm_dialog = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    def did_mount(self) -> None:
+        self._page = self.page
+        event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
+
+    def will_unmount(self) -> None:
+        event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
+
+    async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
+        """Actualiza estado del bot y bloquea/desbloquea formulario."""
+        self._bot_active = event.is_running
+        self._update_form_lock()
+
+    def _update_form_lock(self) -> None:
+        """Bloquea/desbloquea el formulario según estado del bot."""
+        disabled = self._bot_active
+        self._mode_section.set_disabled(disabled)
+        self._type_section.set_disabled(disabled)
+        self._params_section.set_disabled(disabled)
+        self._save_btn.disabled = disabled or not self._has_changes()
+        try:
+            self._save_btn.update()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Detección de cambios
@@ -149,6 +178,9 @@ class SettingsView(ft.Column):
     # Handlers
     # ------------------------------------------------------------------
     def _on_save(self, e: ft.ControlEvent) -> None:
+        if self._bot_active:
+            self._show_bot_active_warning()
+            return
         form = self._build_form_data()
         changes = ConfirmDialogHelper.build_changes_summary(form)
         self._confirm_dialog = ConfirmDialogHelper.show(
@@ -242,6 +274,39 @@ class SettingsView(ft.Column):
         self._mode_section.restore(form_snapshot)
         self._type_section.restore(form_snapshot)
         self._params_section.restore(form_snapshot)
+
+    def _show_bot_active_warning(self) -> None:
+        """Muestra alerta de que el bot debe detenerse primero."""
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Bot Activo", color=ft.Colors.AMBER_400, size=15),
+            bgcolor=ft.Colors.BLUE_GREY_900,
+            content=ft.Text(
+                "Detén el bot primero para cambiar configuración.",
+                color=ft.Colors.BLUE_GREY_300,
+            ),
+            actions=[
+                ft.TextButton(
+                    "Entendido",
+                    on_click=lambda e: self._close_warning_dialog(dialog),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        if self._page:
+            self._page.overlay.append(dialog)
+            self._page.update()
+            dialog.open = True
+            dialog.update()
+
+    def _close_warning_dialog(self, dialog: ft.AlertDialog) -> None:
+        """Cierra el modal de advertencia."""
+        if dialog:
+            dialog.open = False
+            dialog.update()
+            if self._page and dialog in self._page.overlay:
+                self._page.overlay.remove(dialog)
+                self._page.update()
 
     def refresh_symbols(self) -> None:
         self._params_section.refresh_symbols()

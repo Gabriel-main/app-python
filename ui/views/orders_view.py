@@ -7,6 +7,7 @@ Refactorizado para aplicar DIP:
 from __future__ import annotations
 
 import asyncio
+from typing import Protocol
 
 import flet as ft
 
@@ -20,8 +21,8 @@ class OrdersView(ft.Column):
 
     def __init__(self, order_repository: object | None = None) -> None:
         super().__init__()
-        self._loading = True
         self._repository = order_repository
+        self._load_task: asyncio.Task | None = None
 
         self._list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
         self._loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3)
@@ -69,28 +70,22 @@ class OrdersView(ft.Column):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(OrderExecutedEvent, self._on_order_executed)
-        asyncio.create_task(self._load_orders(), name="load_orders_view")
+        self._load_task = asyncio.create_task(self._load_orders(), name="load_orders_view")
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(OrderExecutedEvent, self._on_order_executed)
+        if self._load_task and not self._load_task.done():
+            self._load_task.cancel()
 
     # ------------------------------------------------------------------
     # Carga inicial desde DB
     # ------------------------------------------------------------------
     async def _load_orders(self) -> None:
         try:
-            if self._repository:
-                orders = await self._repository.get_recent_orders(100)
-            else:
-                # Fallback: acceso directo (legacy)
-                from sqlmodel import select
-                from database.connection import get_session
-                from database.models import Order
-                async with get_session() as session:
-                    result = await session.exec(
-                        select(Order).order_by(Order.timestamp.desc()).limit(100)
-                    )
-                    orders = [o.model_dump() for o in result.all()]
+            if not self._repository:
+                raise RuntimeError("OrderRepository no inyectado en OrdersView")
+
+            orders = await self._repository.get_recent_orders(100)
 
             self._list_column.controls.clear()
 
@@ -108,6 +103,8 @@ class OrdersView(ft.Column):
             count = len(orders) if orders else 0
             self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
 
+        except asyncio.CancelledError:
+            return
         except Exception as exc:
             self._list_column.controls.append(
                 ft.Text(f"Error cargando órdenes: {exc}", color=ft.Colors.RED_400, size=12)
