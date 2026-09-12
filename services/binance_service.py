@@ -281,6 +281,11 @@ class BinanceService:
     _symbols_cache: list[dict] | None = None
     _symbols_cache_time: float = 0.0
 
+    def clear_symbols_cache(self) -> None:
+        """Limpia el caché de símbolos para forzar recarga."""
+        self._symbols_cache = None
+        self._symbols_cache_time = 0.0
+
     async def get_trading_symbols(self) -> list[dict]:
         """Obtiene símbolos disponibles (USDT/USDC) con precios actuales.
         Cache de 60 segundos para evitar rate limits."""

@@ -2,9 +2,11 @@
 Settings View — Configuración del bot de trading.
 
 Permite al usuario cambiar:
+- Símbolo de trading
 - Modo de operación (Paper / Live)
 - Tipo de trading (Spot/Futures/Margin)
 - API Keys (solo en modo Live, campos con password=True)
+- Parámetros de operación (Monto, Stop Loss, Temporalidad)
 
 Al guardar: muestra modal de confirmación, luego publica SettingsUpdatedEvent.
 """
@@ -17,6 +19,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import SettingsUpdatedEvent
+from ui.components.symbol_picker import SymbolPicker
 
 
 class SettingsView(ft.Column):
@@ -153,6 +156,105 @@ class SettingsView(ft.Column):
             visible=settings.TRADING_MODE == "LIVE",
         )
 
+        # --- SymbolPicker ---
+        self._symbol_picker = SymbolPicker(
+            on_symbol_changed=self._on_symbol_changed
+        )
+
+        # --- Parámetros de Operación ---
+        self._amount_field = ft.TextField(
+            label="Monto",
+            value=str(settings.TRADE_AMOUNT),
+            hint_text="10.0",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.CYAN_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            expand=True,
+            on_change=lambda e: self._update_save_button_state(),
+        )
+
+        self._currency_dropdown = ft.Dropdown(
+            label="Moneda",
+            value=settings.TRADE_CURRENCY,
+            options=[
+                ft.DropdownOption(key="USDT", text="USDT"),
+                ft.DropdownOption(key="USDC", text="USDC"),
+            ],
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.CYAN_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            width=120,
+            on_select=self._on_currency_changed,
+        )
+
+        self._sl_field = ft.TextField(
+            label="Stop Loss",
+            value=str(settings.STOP_LOSS),
+            hint_text="1.01",
+            prefix_icon=ft.Icons.TRENDING_DOWN,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.RED_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            expand=True,
+            on_change=lambda e: self._update_save_button_state(),
+        )
+
+        self._sl_type_dropdown = ft.Dropdown(
+            label="Tipo SL",
+            value=settings.STOP_LOSS_TYPE,
+            options=[
+                ft.DropdownOption(key="PERCENT", text="%"),
+                ft.DropdownOption(key="USDT", text="USDT"),
+            ],
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.RED_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            width=100,
+            on_select=lambda e: self._update_save_button_state(),
+        )
+
+        self._timeframe_field = ft.TextField(
+            label="Temporalidad",
+            value=str(settings.TIMEFRAME),
+            hint_text="1",
+            prefix_icon=ft.Icons.TIMER,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.AMBER_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            expand=True,
+            on_change=lambda e: self._update_save_button_state(),
+        )
+
+        self._timeframe_unit_dropdown = ft.Dropdown(
+            label="Unidad",
+            value=settings.TIMEFRAME_UNIT,
+            options=[
+                ft.DropdownOption(key="MINUTES", text="Min"),
+                ft.DropdownOption(key="HOURS", text="Horas"),
+            ],
+            bgcolor=ft.Colors.GREY_900,
+            border_color=ft.Colors.BLUE_GREY_700,
+            focused_border_color=ft.Colors.AMBER_400,
+            color=ft.Colors.WHITE,
+            label_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            width=100,
+            on_select=lambda e: self._update_save_button_state(),
+        )
+
         self._save_btn = ft.FilledButton(
             content="Guardar y Reconectar",
             icon=ft.Icons.SAVE,
@@ -221,6 +323,24 @@ class SettingsView(ft.Column):
                 ),
             ),
 
+            # Parámetros de Operación
+            ft.Container(
+                width=380,
+                bgcolor=ft.Colors.BLUE_GREY_900,
+                border_radius=14,
+                padding=ft.Padding.all(16),
+                content=ft.Column(
+                    controls=[
+                        ft.Text("📋 Parámetros", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                        ft.Row(controls=[self._amount_field, self._currency_dropdown], spacing=8),
+                        self._symbol_picker,
+                        ft.Row(controls=[self._sl_field, self._sl_type_dropdown], spacing=8),
+                        ft.Row(controls=[self._timeframe_field, self._timeframe_unit_dropdown], spacing=8),
+                    ],
+                    spacing=12,
+                ),
+            ),
+
             # Guardar
             ft.Row(controls=[self._save_btn], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row(controls=[self._feedback_text], alignment=ft.MainAxisAlignment.CENTER),
@@ -242,6 +362,15 @@ class SettingsView(ft.Column):
         leverage = int(self._leverage_dropdown.value or "1")
         order_type = self._order_type_dropdown.value or "MARKET"
         limit_price = float(self._limit_price_field.value or "0")
+        
+        # Nuevos campos
+        symbol = self._symbol_picker.get_selected_symbol()
+        amount = float(self._amount_field.value or "10.0")
+        currency = self._currency_dropdown.value or "USDT"
+        sl = float(self._sl_field.value or "1.01")
+        sl_type = self._sl_type_dropdown.value or "PERCENT"
+        timeframe = int(self._timeframe_field.value or "1")
+        tf_unit = self._timeframe_unit_dropdown.value or "MINUTES"
 
         return (
             mode != settings.TRADING_MODE
@@ -249,6 +378,13 @@ class SettingsView(ft.Column):
             or leverage != settings.LEVERAGE
             or order_type != settings.ORDER_TYPE
             or (order_type == "LIMIT" and limit_price != settings.LIMIT_PRICE)
+            or symbol != settings.TRADING_SYMBOL
+            or amount != settings.TRADE_AMOUNT
+            or currency != settings.TRADE_CURRENCY
+            or sl != settings.STOP_LOSS
+            or sl_type != settings.STOP_LOSS_TYPE
+            or timeframe != settings.TIMEFRAME
+            or tf_unit != settings.TIMEFRAME_UNIT
         )
 
     def _update_save_button_state(self) -> None:
@@ -282,6 +418,20 @@ class SettingsView(ft.Column):
         self._limit_price_field.update()
         self._update_save_button_state()
 
+    def _on_symbol_changed(self, symbol: str) -> None:
+        """Cuando el usuario cambia el símbolo, actualizar settings."""
+        settings.TRADING_SYMBOL = symbol
+        self._update_save_button_state()
+
+    def _on_currency_changed(self, e: ft.ControlEvent) -> None:
+        """Cuando cambia la moneda, limpiar caché y recargar símbolos filtrados."""
+        currency = e.control.value or "USDT"
+        settings.TRADE_CURRENCY = currency
+        from services.binance_service import binance_service
+        binance_service.clear_symbols_cache()
+        self._symbol_picker.refresh_symbols()
+        self._update_save_button_state()
+
     def _on_save(self, e: ft.ControlEvent) -> None:
         """Abre modal de confirmación antes de guardar."""
         self._show_confirm_dialog()
@@ -301,9 +451,20 @@ class SettingsView(ft.Column):
         leverage = int(self._leverage_dropdown.value or "1")
         order_type = self._order_type_dropdown.value or "MARKET"
         limit_price = float(self._limit_price_field.value or "0")
+        
+        # Nuevos campos
+        symbol = self._symbol_picker.get_selected_symbol()
+        amount = float(self._amount_field.value or "10.0")
+        currency = self._currency_dropdown.value or "USDT"
+        sl = float(self._sl_field.value or "1.01")
+        sl_type = self._sl_type_dropdown.value or "PERCENT"
+        timeframe = int(self._timeframe_field.value or "1")
+        tf_unit = self._timeframe_unit_dropdown.value or "MINUTES"
 
         # Construir resumen de cambios
         changes = []
+        if symbol != settings.TRADING_SYMBOL:
+            changes.append(f"Símbolo: {settings.TRADING_SYMBOL} → {symbol}")
         if mode != settings.TRADING_MODE:
             changes.append(f"Modo: {settings.TRADING_MODE} → {mode}")
         if trading_type != settings.TRADING_TYPE:
@@ -314,6 +475,18 @@ class SettingsView(ft.Column):
             changes.append(f"Orden: {settings.ORDER_TYPE} → {order_type}")
         if limit_price != settings.LIMIT_PRICE and settings.ORDER_TYPE == "LIMIT":
             changes.append(f"Precio Límite: ${settings.LIMIT_PRICE} → ${limit_price}")
+        if amount != settings.TRADE_AMOUNT:
+            changes.append(f"Monto: ${settings.TRADE_AMOUNT} → ${amount}")
+        if currency != settings.TRADE_CURRENCY:
+            changes.append(f"Moneda: {settings.TRADE_CURRENCY} → {currency}")
+        if sl != settings.STOP_LOSS:
+            changes.append(f"Stop Loss: {settings.STOP_LOSS} → {sl}")
+        if sl_type != settings.STOP_LOSS_TYPE:
+            changes.append(f"Tipo SL: {settings.STOP_LOSS_TYPE} → {sl_type}")
+        if timeframe != settings.TIMEFRAME:
+            changes.append(f"Temporalidad: {settings.TIMEFRAME} → {timeframe}")
+        if tf_unit != settings.TIMEFRAME_UNIT:
+            changes.append(f"Unidad: {settings.TIMEFRAME_UNIT} → {tf_unit}")
 
         if not changes:
             changes.append("No hay cambios detectados")
@@ -388,6 +561,13 @@ class SettingsView(ft.Column):
             "LIMIT_PRICE": settings.LIMIT_PRICE,
             "BINANCE_API_KEY": settings.BINANCE_API_KEY,
             "BINANCE_API_SECRET": settings.BINANCE_API_SECRET,
+            "TRADING_SYMBOL": settings.TRADING_SYMBOL,
+            "TRADE_AMOUNT": settings.TRADE_AMOUNT,
+            "TRADE_CURRENCY": settings.TRADE_CURRENCY,
+            "STOP_LOSS": settings.STOP_LOSS,
+            "STOP_LOSS_TYPE": settings.STOP_LOSS_TYPE,
+            "TIMEFRAME": settings.TIMEFRAME,
+            "TIMEFRAME_UNIT": settings.TIMEFRAME_UNIT,
         }
 
         form_snapshot = {
@@ -398,10 +578,17 @@ class SettingsView(ft.Column):
             "limit_price": self._limit_price_field.value,
             "api_key": self._api_key_field.value,
             "api_secret": self._api_secret_field.value,
+            "symbol": self._symbol_picker.get_selected_symbol(),
+            "amount": self._amount_field.value,
+            "currency": self._currency_dropdown.value,
+            "sl": self._sl_field.value,
+            "sl_type": self._sl_type_dropdown.value,
+            "timeframe": self._timeframe_field.value,
+            "tf_unit": self._timeframe_unit_dropdown.value,
         }
 
         try:
-            symbol = settings.TRADING_SYMBOL
+            symbol = self._symbol_picker.get_selected_symbol()
             mode = self._mode_dropdown.value or "PAPER"
             trading_type = self._trading_type_dropdown.value or "SPOT"
             leverage = int(self._leverage_dropdown.value or "1")
@@ -409,6 +596,14 @@ class SettingsView(ft.Column):
             limit_price = float(self._limit_price_field.value or "0")
             api_key = self._api_key_field.value or ""
             api_secret = self._api_secret_field.value or ""
+            
+            # Nuevos campos
+            amount = float(self._amount_field.value or "10.0")
+            currency = self._currency_dropdown.value or "USDT"
+            sl = float(self._sl_field.value or "1.01")
+            sl_type = self._sl_type_dropdown.value or "PERCENT"
+            timeframe = int(self._timeframe_field.value or "1")
+            tf_unit = self._timeframe_unit_dropdown.value or "MINUTES"
 
             # 1. Guardar solo variables sensibles en .env
             self._write_env_sensitive(api_key, api_secret)
@@ -416,20 +611,34 @@ class SettingsView(ft.Column):
             # 2. Guardar configuración de trading en DB (async)
             import asyncio
             asyncio.create_task(self._save_config_to_db(
+                symbol=symbol,
                 mode=mode,
                 trading_type=trading_type,
                 leverage=leverage,
                 order_type=order_type,
                 limit_price=limit_price,
+                amount=amount,
+                currency=currency,
+                sl=sl,
+                sl_type=sl_type,
+                timeframe=timeframe,
+                tf_unit=tf_unit,
             ))
 
             # 3. Actualizar settings en memoria
             settings.reload_from_env()  # Solo sensibles
+            settings.TRADING_SYMBOL = symbol
             settings.TRADING_MODE = mode
             settings.TRADING_TYPE = trading_type
             settings.LEVERAGE = leverage
             settings.ORDER_TYPE = order_type
             settings.LIMIT_PRICE = limit_price
+            settings.TRADE_AMOUNT = amount
+            settings.TRADE_CURRENCY = currency
+            settings.STOP_LOSS = sl
+            settings.STOP_LOSS_TYPE = sl_type
+            settings.TIMEFRAME = timeframe
+            settings.TIMEFRAME_UNIT = tf_unit
 
             # 4. Publicar evento para que los servicios reaccionen
             event_bus.publish(SettingsUpdatedEvent(
@@ -439,12 +648,12 @@ class SettingsView(ft.Column):
                 leverage=leverage,
                 order_type=order_type,
                 limit_price=limit_price,
-                trade_amount=settings.TRADE_AMOUNT,
-                trade_currency=settings.TRADE_CURRENCY,
-                stop_loss=settings.STOP_LOSS,
-                stop_loss_type=settings.STOP_LOSS_TYPE,
-                timeframe=settings.TIMEFRAME,
-                timeframe_unit=settings.TIMEFRAME_UNIT,
+                trade_amount=amount,
+                trade_currency=currency,
+                stop_loss=sl,
+                stop_loss_type=sl_type,
+                timeframe=timeframe,
+                timeframe_unit=tf_unit,
                 api_key=api_key,
                 api_secret=api_secret,
             ))
@@ -468,17 +677,25 @@ class SettingsView(ft.Column):
             self._close_dialog()
             self._feedback_text.update()
 
-    async def _save_config_to_db(self, mode: str, trading_type: str,
-                                  leverage: int, order_type: str,
-                                  limit_price: float) -> None:
+    async def _save_config_to_db(self, symbol: str, mode: str, trading_type: str,
+                                  leverage: int, order_type: str, limit_price: float,
+                                  amount: float, currency: str, sl: float, sl_type: str,
+                                  timeframe: int, tf_unit: str) -> None:
         """Guarda la configuración de trading en la base de datos."""
         from services.config_service import config_service
         await config_service.update(
+            trading_symbol=symbol,
             trading_mode=mode,
             trading_type=trading_type,
             leverage=leverage,
             order_type=order_type,
             limit_price=limit_price,
+            trade_amount=amount,
+            trade_currency=currency,
+            stop_loss=sl,
+            stop_loss_type=sl_type,
+            timeframe=timeframe,
+            timeframe_unit=tf_unit,
         )
 
     def _restore_form_fields(self, form_snapshot: dict) -> None:
@@ -490,6 +707,14 @@ class SettingsView(ft.Column):
         self._limit_price_field.value = form_snapshot["limit_price"]
         self._api_key_field.value = form_snapshot["api_key"]
         self._api_secret_field.value = form_snapshot["api_secret"]
+        
+        # Restaurar nuevos campos
+        self._amount_field.value = form_snapshot["amount"]
+        self._currency_dropdown.value = form_snapshot["currency"]
+        self._sl_field.value = form_snapshot["sl"]
+        self._sl_type_dropdown.value = form_snapshot["sl_type"]
+        self._timeframe_field.value = form_snapshot["timeframe"]
+        self._timeframe_unit_dropdown.value = form_snapshot["tf_unit"]
 
         # Actualizar visibilidad según modo
         is_live = form_snapshot["mode"] == "LIVE"
@@ -504,6 +729,11 @@ class SettingsView(ft.Column):
         # Actualizar visibilidad según tipo de orden
         is_limit = form_snapshot["order_type"] == "LIMIT"
         self._limit_price_field.visible = is_limit
+
+    def refresh_symbols(self) -> None:
+        """Refresca la lista de símbolos del SymbolPicker."""
+        if hasattr(self, '_symbol_picker'):
+            self._symbol_picker.refresh_symbols()
 
     def _close_dialog(self) -> None:
         """Cierra el modal de confirmación."""

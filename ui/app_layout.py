@@ -105,6 +105,10 @@ async def main(page: ft.Page) -> None:
         current_view_index = index
         view_container.content = views[index]
         view_container.update()
+        
+        # Refresh symbols when navigating to Settings
+        if index == 2:  # Settings tab
+            settings_view.refresh_symbols()
 
     # ------------------------------------------------------------------
     # Layout principal con fondo gradiente
