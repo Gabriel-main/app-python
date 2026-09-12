@@ -18,7 +18,7 @@ import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import SettingsUpdatedEvent
+from core.events import NavigateToEvent, SettingsUpdatedEvent
 from services.env_service import EnvService
 from ui.components.symbol_picker import SymbolPicker
 
@@ -642,6 +642,7 @@ class SettingsView(ft.Column):
 
             self._feedback_text.value = "✅ Configuración guardada. Reconectando..."
             self._feedback_text.color = ft.Colors.GREEN_400
+            event_bus.publish(NavigateToEvent(index=0))
 
         except Exception as exc:
             EnvService.rollback(env_snapshot)

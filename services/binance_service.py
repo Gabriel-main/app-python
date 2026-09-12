@@ -171,7 +171,7 @@ class BinanceService:
     # ------------------------------------------------------------------
 
     async def _run_live_stream(self) -> None:
-        from binance import BinanceSocketManager  # type: ignore
+        from binance import BinanceSocketManager, FuturesType  # type: ignore
         from binance.exceptions import BinanceAPIException, BinanceRequestException  # type: ignore
         from services.binance_client import create_client
 
@@ -183,9 +183,13 @@ class BinanceService:
 
             # Seleccionar stream según TRADING_TYPE
             if settings.TRADING_TYPE == "FUTURES":
-                stream_context = bm.futures_socket()
+                stream_context = bm._get_futures_socket(
+                    f"{symbol_lower}@ticker",
+                    futures_type=FuturesType.USD_M,
+                    category="market",
+                )
             elif settings.TRADING_TYPE == "MARGIN":
-                stream_context = bm.margin_socket()
+                stream_context = bm.symbol_ticker_socket(symbol_lower)
             else:  # SPOT
                 stream_context = bm.symbol_ticker_socket(symbol_lower)
 

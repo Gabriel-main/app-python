@@ -165,3 +165,9 @@ class SettingsUpdatedEvent:
     timeframe_unit: str = "MINUTES"
     api_key: str = ""
     api_secret: str = ""
+
+
+@dataclass
+class NavigateToEvent:
+    """Solicitud de navegación a un tab específico."""
+    index: int  # 0=Dashboard, 1=Órdenes, 2=Config

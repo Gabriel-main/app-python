@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings
 from core.event_bus import event_bus
+from core.events import NavigateToEvent
 from core.logger import setup_logging
 from database.connection import create_db_and_tables
 from database.db_queue import db_queue
@@ -110,6 +111,10 @@ async def main(page: ft.Page) -> None:
         if index == 2:  # Settings tab
             settings_view.refresh_symbols()
 
+    async def _on_navigate_to(e: NavigateToEvent) -> None:
+        """Handler para eventos de navegación desde otros componentes."""
+        _navigate(e.index)
+
     # ------------------------------------------------------------------
     # Layout principal con fondo gradiente
     # ------------------------------------------------------------------
@@ -157,6 +162,9 @@ async def main(page: ft.Page) -> None:
     await db_queue.start()
     await bot_engine.start()
     await binance_service.start()
+
+    # Suscribir a eventos de navegación
+    event_bus.subscribe(NavigateToEvent, _on_navigate_to)
 
     # ------------------------------------------------------------------
     # Limpieza al cerrar
