@@ -17,7 +17,7 @@ class Settings:
     # --- Sensibles (desde .env) ---
     BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
     BINANCE_API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
-    BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+    BINANCE_TESTNET: bool = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
 
     # --- Base de Datos ---
     DB_PATH: str = os.getenv("DB_PATH", str(BASE_DIR / "trading_bot.db"))
@@ -55,7 +55,7 @@ class Settings:
         load_dotenv(BASE_DIR / ".env", override=True)
         self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
         self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
-        self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+        self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
 
     async def load_from_db(self) -> None:
         """Carga configuración de trading desde la base de datos."""

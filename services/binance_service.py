@@ -134,7 +134,7 @@ class BinanceService:
                     status="CONNECTING",
                     message=f"Conectando a {settings.TRADING_SYMBOL}..."
                 ))
-                if settings.has_api_keys():
+                if settings.TRADING_MODE == "LIVE" and settings.has_api_keys():
                     await self._run_live_stream()
                 else:
                     await self._run_mock_stream()
@@ -275,15 +275,11 @@ class BinanceService:
         if self._symbols_cache and (now - self._symbols_cache_time) < 60.0:
             return self._symbols_cache
 
-        from binance import AsyncClient  # type: ignore
+        from services.binance_client import create_client
 
         client = None
         try:
-            client = await AsyncClient.create(
-                api_key=settings.BINANCE_API_KEY or None,
-                api_secret=settings.BINANCE_API_SECRET or None,
-                testnet=settings.BINANCE_TESTNET,
-            )
+            client = await create_client()
 
             exchange_info = await client.get_exchange_info()
             all_prices = await client.get_all_tickers()
@@ -323,15 +319,11 @@ class BinanceService:
 
     async def get_symbol_price(self, symbol: str) -> float:
         """Obtiene el precio actual de un símbolo específico."""
-        from binance import AsyncClient  # type: ignore
+        from services.binance_client import create_client
 
         client = None
         try:
-            client = await AsyncClient.create(
-                api_key=settings.BINANCE_API_KEY or None,
-                api_secret=settings.BINANCE_API_SECRET or None,
-                testnet=settings.BINANCE_TESTNET,
-            )
+            client = await create_client()
             ticker = await client.get_symbol_ticker(symbol=symbol)
             return float(ticker.get("price", 0))
         except Exception as exc:
@@ -369,15 +361,11 @@ class BinanceService:
             self._balance_cache_time = now
             return event
 
-        from binance import AsyncClient  # type: ignore
+        from services.binance_client import create_client
 
         client = None
         try:
-            client = await AsyncClient.create(
-                api_key=settings.BINANCE_API_KEY,
-                api_secret=settings.BINANCE_API_SECRET,
-                testnet=settings.BINANCE_TESTNET,
-            )
+            client = await create_client()
 
             event = BalanceUpdateEvent(
                 asset=asset,
