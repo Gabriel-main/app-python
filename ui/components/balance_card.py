@@ -1,9 +1,10 @@
 """
 BalanceCard — Card de fondos/cuenta del usuario.
 
-Refactorizado para aplicar OCP + SRP:
-- Usa BalanceDisplayStrategy para formatos por trading type
-- Agregar tipo = crear clase, no modificar if/elif/else
+Refactorizado para aplicar:
+- DRY: Reutiliza StatCard para estructura base
+- OCP: Usa BalanceDisplayStrategy para formatos por trading type
+- SRP: Solo maneja lógica de balance y formato
 """
 from __future__ import annotations
 
@@ -21,17 +22,17 @@ from ui.components.balance_display import (
 )
 from ui.components.badges import Badge
 from ui.components.colors import TRADING_TYPE_COLORS
+from ui.components.stat_card import StatCard
 
 
-class BalanceCard(ft.Container):
+class BalanceCard(StatCard):
     """Card que muestra el saldo de la cuenta del usuario."""
 
     def __init__(self) -> None:
-        super().__init__()
         self._last_update: float = 0.0
         self._strategy: BalanceDisplayStrategy = get_strategy(settings.TRADING_TYPE)
 
-        # Badge de tipo
+        # Badge de tipo (elemento específico de BalanceCard)
         type_info = TRADING_TYPE_COLORS.get(settings.TRADING_TYPE, TRADING_TYPE_COLORS["SPOT"])
         self._type_badge = Badge(
             label=type_info[2], fg_color=type_info[0], bg_color=type_info[1]
@@ -57,67 +58,43 @@ class BalanceCard(ft.Container):
             color=ft.Colors.CYAN_400, visible=False,
         )
 
-        self.bgcolor = ft.Colors.with_opacity(0.06, ft.Colors.WHITE)
-        self.border_radius = 14
-        self.padding = ft.Padding(left=16, right=16, top=12, bottom=12)
-
-        self.content = ft.Column(
-            controls=[
-                # Header
-                ft.Row(
-                    controls=[
-                        ft.Text("💰 Fondos", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
-                        ft.Container(expand=True),
-                        self._type_badge,
-                        ft.Container(width=4),
-                        self._loading,
-                    ],
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                ft.Container(height=8),
-                # Fila 1
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[self._label_1, self._value_1],
-                            spacing=2, expand=True,
-                        ),
-                    ],
-                ),
-                ft.Container(height=4),
-                # Fila 2
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[self._label_2, self._value_2],
-                            spacing=2, expand=True,
-                        ),
-                    ],
-                ),
-                ft.Container(height=4),
-                # Fila 3 (oculta por defecto)
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[self._label_3, self._value_3],
-                            spacing=2, expand=True,
-                        ),
-                    ],
-                    visible=False,
-                ),
-                # Timestamp
-                self._time_text,
+        # Inicializar StatCard con estructura base
+        super().__init__(
+            title="💰 Fondos",
+            rows=[
+                (labels[0], self._value_1),
+                (labels[1] or "", self._value_2),
+                (labels[2] or "", self._value_3),
             ],
-            spacing=0,
+            event_subscriptions=[
+                (BalanceUpdateEvent, self._on_balance_update),
+                (SettingsUpdatedEvent, self._on_settings_updated),
+            ],
+            show_dividers=False,
         )
 
+        # Agregar elementos específicos de BalanceCard al header
+        self._inject_header_extras()
+
+    def _inject_header_extras(self) -> None:
+        """Inyecta badge y loading indicator en el header existente."""
+        if isinstance(self.content, ft.Column) and len(self.content.controls) > 0:
+            header_row = self.content.controls[0]
+            if isinstance(header_row, ft.Row):
+                # Insertar antes del Container(expand=True)
+                header_row.controls.insert(-1, self._type_badge)
+                header_row.controls.insert(-1, ft.Container(width=4))
+                header_row.controls.insert(-1, self._loading)
+
+        # Agregar timestamp al final
+        if isinstance(self.content, ft.Column):
+            self.content.controls.append(self._time_text)
+
     def did_mount(self) -> None:
-        event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
-        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._setup_subscriptions()
 
     def will_unmount(self) -> None:
-        event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
-        event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._teardown_subscriptions()
 
     def _sync_from_settings(self) -> None:
         """Re-sincroniza strategy y badge desde settings."""
@@ -154,7 +131,6 @@ class BalanceCard(ft.Container):
             self._label_3.visible = True
             self._value_3.visible = True
             self._value_3.value = v3
-            # Color verde/rojo para PnL
             pnl_val = event.unrealized_pnl if hasattr(event, "unrealized_pnl") else 0
             self._value_3.color = ft.Colors.GREEN_400 if pnl_val >= 0 else ft.Colors.RED_400
         else:

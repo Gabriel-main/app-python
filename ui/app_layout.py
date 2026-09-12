@@ -1,4 +1,4 @@
-"""
+R"""
 App Layout — Shell principal con NavigationBar.
 
 Monta la app Flet con:
@@ -65,11 +65,11 @@ async def main(page: ft.Page) -> None:
     views = [dashboard, orders, settings_view]
     current_view_index = 0
 
-    # Contenedor de vistas
+    # Contenedor de vistas (padding lateral aquí para que scrollbar esté al borde)
     view_container = ft.Container(
         content=dashboard,
         expand=True,
-        padding=ft.Padding(left=0, right=0, top=8, bottom=8),
+        padding=ft.Padding(left=22, right=22, top=18, bottom=8),
     )
 
     # ------------------------------------------------------------------
@@ -106,7 +106,7 @@ async def main(page: ft.Page) -> None:
         current_view_index = index
         view_container.content = views[index]
         view_container.update()
-        
+
         # Refresh symbols when navigating to Settings
         if index == 2:  # Settings tab
             settings_view.refresh_symbols()
@@ -127,7 +127,10 @@ async def main(page: ft.Page) -> None:
         ),
         content=ft.Column(
             controls=[
-                view_container,
+                ft.Container(
+                    content=view_container,
+                    expand=True,
+                ),
                 nav_bar,
             ],
             spacing=0,

@@ -1,10 +1,10 @@
 """
 Dashboard View — Pantalla principal del bot de trading.
 
-Refactorizado para aplicar SRP:
-- Stats24H maneja stats 24h (extraído)
-- BotToggle maneja ON/OFF del bot (extraído)
-- ModeBadge maneja el badge de modo (extraído)
+Refactorizado para aplicar:
+- SRP: Solo orquesta componentes, delega layout a ResponsiveDashboardLayout
+- DIP: Depende de DashboardLayout (abstracción), no de implementación concreta
+- OCP: Nuevo layout = nueva clase, no modificar DashboardView
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import PriceTickEvent, SettingsUpdatedEvent
+from ui.layouts.responsive_layout import ResponsiveDashboardLayout
 from ui.components.bot_toggle import BotToggle
 from ui.components.connection_indicator import ConnectionIndicator
 from ui.components.mini_chart import MiniChart
@@ -29,7 +30,7 @@ log = logging.getLogger(__name__)
 
 
 class DashboardView(ft.Column):
-    """Vista principal con precio en tiempo real y estado del bot."""
+    """Vista principal — delega layout a ResponsiveDashboardLayout."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,67 +46,59 @@ class DashboardView(ft.Column):
         self._toggle_btn = BotToggle()
         self._mode_badge = ModeBadge(mode=settings.TRADING_MODE)
 
-        # --- Layout ---
-        self.controls = [
-            # Header
-            ft.Row(
-                controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Text(
-                                settings.APP_TITLE,
-                                size=22,
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.WHITE,
-                            ),
-                            self._conn_indicator,
-                        ],
-                        spacing=2,
-                    ),
-                    ft.Container(expand=True),
-                    self._mode_badge,
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
+        # --- Layout (DIP: inyección de dependencias) ---
+        components = {
+            "header": self._build_header(),
+            "price_section": self._build_price_section(),
+            "stats": self._stats,
+            "balance": self._balance_card,
+            "bot_status": self._bot_bar,
+            "bot_toggle": self._toggle_btn,
+            "operations": self._operations_panel,
+        }
 
-            ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
-
-            # Precio principal
-            ft.Container(
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-                border_radius=16,
-                padding=ft.Padding.all(20),
-                content=ft.Column(
-                    controls=[
-                        self._ticker,
-                        ft.Container(height=8),
-                        self._chart,
-                    ],
-                    spacing=0,
-                ),
-            ),
-
-            # Stats 24h
-            self._stats,
-
-            # Balance Card
-            self._balance_card,
-
-            # Bot status bar
-            self._bot_bar,
-
-            # Botón toggle bot
-            ft.Row(
-                controls=[self._toggle_btn],
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-
-            # Operaciones duales
-            self._operations_panel,
-        ]
-
+        self._layout = ResponsiveDashboardLayout()
+        self.controls = [self._layout.build(components)]
         self.spacing = 12
-        self.scroll = ft.ScrollMode.AUTO
+        self.scroll = ft.Scrollbar(thickness=6, interactive=True)
+
+    def _build_header(self) -> ft.Control:
+        """Construye el header con título, indicador de conexión y badge de modo."""
+        return ft.Row(
+            controls=[
+                ft.Column(
+                    controls=[
+                        ft.Text(
+                            settings.APP_TITLE,
+                            size=22,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.WHITE,
+                        ),
+                        self._conn_indicator,
+                    ],
+                    spacing=2,
+                ),
+                ft.Container(expand=True),
+                self._mode_badge,
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+
+    def _build_price_section(self) -> ft.Control:
+        """Construye la sección de precio con ticker y chart."""
+        return ft.Container(
+            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+            border_radius=16,
+            padding=ft.Padding.all(20),
+            content=ft.Column(
+                controls=[
+                    self._ticker,
+                    ft.Container(height=8),
+                    self._chart,
+                ],
+                spacing=0,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -137,6 +130,10 @@ class DashboardView(ft.Column):
     # ------------------------------------------------------------------
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Actualiza badges del header al cambiar configuración."""
-        log.info("DashboardView: settings updated - symbol=%s, trading_type=%s, mode=%s",
-                 event.symbol, event.trading_type, event.mode)
+        log.info(
+            "DashboardView: settings updated - symbol=%s, trading_type=%s, mode=%s",
+            event.symbol,
+            event.trading_type,
+            event.mode,
+        )
         self._sync_from_settings()
