@@ -1,13 +1,15 @@
 """
 OrderCard — Tarjeta de orden ejecutada.
 
-Recibe un dict de datos de orden y muestra:
-- Símbolo, lado (BUY/SELL), precio, cantidad, modo (PAPER/LIVE), PnL.
+Refactorizado para aplicar DRY:
+- Usa SIDE_COLORS, SIDE_LABELS, MODE_COLORS de colors.py
 """
 from __future__ import annotations
 
 import flet as ft
 from datetime import datetime
+
+from ui.components.colors import SIDE_COLORS, SIDE_LABELS, MODE_COLORS
 
 
 def OrderCard(order: dict) -> ft.Card:
@@ -18,9 +20,9 @@ def OrderCard(order: dict) -> ft.Card:
     pnl = order.get("pnl")
     ts = order.get("timestamp", 0)
 
-    side_color = ft.Colors.GREEN_400 if side == "BUY" else ft.Colors.RED_400
-    side_bg = ft.Colors.GREEN_900 if side == "BUY" else ft.Colors.RED_900
-    mode_color = ft.Colors.AMBER_400 if mode == "LIVE" else ft.Colors.BLUE_GREY_400
+    side_fg, side_bg = SIDE_COLORS.get(side, (ft.Colors.WHITE, ft.Colors.GREY_800))
+    side_label = SIDE_LABELS.get(side, side)
+    mode_color = MODE_COLORS.get(mode, ft.Colors.BLUE_GREY_400)
 
     pnl_text = ""
     pnl_color = ft.Colors.BLUE_GREY_400
@@ -42,14 +44,9 @@ def OrderCard(order: dict) -> ft.Card:
             padding=ft.Padding(left=16, right=16, top=12, bottom=12),
             content=ft.Row(
                 controls=[
-                    # Lado (BUY/SELL) badge
+                    # Lado badge
                     ft.Container(
-                        content=ft.Text(
-                            side,
-                            size=11,
-                            weight=ft.FontWeight.BOLD,
-                            color=side_color,
-                        ),
+                        content=ft.Text(side_label, size=11, weight=ft.FontWeight.BOLD, color=side_fg),
                         bgcolor=side_bg,
                         border_radius=6,
                         padding=ft.Padding(left=8, right=8, top=4, bottom=4),

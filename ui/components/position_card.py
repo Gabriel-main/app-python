@@ -1,14 +1,14 @@
 """
 PositionCard — Tarjeta de posición abierta (Futures/Margin).
 
-Muestra:
-- Símbolo, lado (LONG/SHORT), leverage
-- Precio de entrada, precio mark, PnL no realizado
-- Barra de progreso del PnL
+Refactorizado para aplicar DRY:
+- Usa TRADING_TYPE_COLORS de colors.py
 """
 from __future__ import annotations
 
 import flet as ft
+
+from ui.components.colors import TRADING_TYPE_COLORS
 
 
 def PositionCard(position: dict) -> ft.Card:
@@ -37,6 +37,9 @@ def PositionCard(position: dict) -> ft.Card:
     pnl_color = ft.Colors.GREEN_400 if unrealized_pnl >= 0 else ft.Colors.RED_400
     sign = "+" if unrealized_pnl >= 0 else ""
 
+    # Trading type badge usando colors
+    tt_info = TRADING_TYPE_COLORS.get(trading_type, (ft.Colors.BLUE_GREY_400, ft.Colors.BLUE_GREY_900, trading_type))
+
     return ft.Card(
         color=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
         elevation=0,
@@ -49,44 +52,25 @@ def PositionCard(position: dict) -> ft.Card:
                         controls=[
                             # Badge LONG/SHORT
                             ft.Container(
-                                content=ft.Text(
-                                    side,
-                                    size=11,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=side_color,
-                                ),
+                                content=ft.Text(side, size=11, weight=ft.FontWeight.BOLD, color=side_color),
                                 bgcolor=side_bg,
                                 border_radius=6,
                                 padding=ft.Padding(left=8, right=8, top=4, bottom=4),
                             ),
                             # Símbolo
-                            ft.Text(
-                                symbol,
-                                size=14,
-                                weight=ft.FontWeight.W_600,
-                                color=ft.Colors.WHITE,
-                            ),
+                            ft.Text(symbol, size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                             ft.Container(expand=True),
                             # Leverage badge
                             ft.Container(
-                                content=ft.Text(
-                                    f"{leverage}x",
-                                    size=10,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=ft.Colors.PURPLE_400,
-                                ),
+                                content=ft.Text(f"{leverage}x", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.PURPLE_400),
                                 bgcolor=ft.Colors.PURPLE_900,
                                 border_radius=4,
                                 padding=ft.Padding(left=6, right=6, top=2, bottom=2),
                             ),
                             # Trading type badge
                             ft.Container(
-                                content=ft.Text(
-                                    trading_type,
-                                    size=9,
-                                    color=ft.Colors.BLUE_GREY_400,
-                                ),
-                                border=ft.Border.all(1, ft.Colors.BLUE_GREY_700),
+                                content=ft.Text(trading_type, size=9, color=tt_info[0]),
+                                border=ft.Border.all(1, tt_info[0]),
                                 border_radius=4,
                                 padding=ft.Padding(left=4, right=4, top=2, bottom=2),
                             ),
@@ -102,16 +86,14 @@ def PositionCard(position: dict) -> ft.Card:
                                     ft.Text("Entrada", size=9, color=ft.Colors.BLUE_GREY_500),
                                     ft.Text(f"${entry_price:,.2f}", size=12, color=ft.Colors.WHITE),
                                 ],
-                                spacing=1,
-                                expand=True,
+                                spacing=1, expand=True,
                             ),
                             ft.Column(
                                 controls=[
                                     ft.Text("Mark", size=9, color=ft.Colors.BLUE_GREY_500),
                                     ft.Text(f"${mark_price:,.2f}", size=12, color=ft.Colors.WHITE),
                                 ],
-                                spacing=1,
-                                expand=True,
+                                spacing=1, expand=True,
                                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                             ),
                             ft.Column(
@@ -119,8 +101,7 @@ def PositionCard(position: dict) -> ft.Card:
                                     ft.Text("Cantidad", size=9, color=ft.Colors.BLUE_GREY_500),
                                     ft.Text(f"{quantity:.6f}", size=12, color=ft.Colors.WHITE),
                                 ],
-                                spacing=1,
-                                expand=True,
+                                spacing=1, expand=True,
                                 horizontal_alignment=ft.CrossAxisAlignment.END,
                             ),
                         ],

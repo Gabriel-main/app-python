@@ -1,10 +1,9 @@
 """
 SymbolPicker — Selector de símbolos con búsqueda y scroll.
 
-Reemplaza el Dropdown nativo de Flet por un picker personalizado:
-- Gatillo compacto mostrando el símbolo seleccionado
-- Overlay con campo de búsqueda y lista scrollable (máx 5 ítems visibles)
-- Precios en tiempo real formateados por magnitud
+Refactorizado para aplicar DIP:
+- Recibe symbol_repository por constructor
+- No importa binance_service directamente
 """
 from __future__ import annotations
 
@@ -20,15 +19,20 @@ log = logging.getLogger(__name__)
 
 MAX_VISIBLE_ITEMS = 5
 ITEM_HEIGHT = 40
-OVERLAY_HEIGHT = MAX_VISIBLE_ITEMS * ITEM_HEIGHT + 56  # items + search field + padding
+OVERLAY_HEIGHT = MAX_VISIBLE_ITEMS * ITEM_HEIGHT + 56
 
 
 class SymbolPicker(ft.Container):
     """Selector de símbolo con búsqueda y lista scrollable."""
 
-    def __init__(self, on_symbol_changed: callable | None = None) -> None:
+    def __init__(
+        self,
+        on_symbol_changed: callable | None = None,
+        symbol_repository: object | None = None,
+    ) -> None:
         super().__init__()
         self._on_symbol_changed = on_symbol_changed
+        self._repository = symbol_repository
         self._symbols: list[dict] = []
         self._filtered: list[dict] = []
         self._loaded = False
@@ -93,11 +97,7 @@ class SymbolPicker(ft.Container):
             content=ft.Row(
                 controls=[
                     self._trigger_label,
-                    ft.Icon(
-                        ft.Icons.KEYBOARD_ARROW_DOWN,
-                        size=18,
-                        color=ft.Colors.BLUE_GREY_400,
-                    ),
+                    ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN, size=18, color=ft.Colors.BLUE_GREY_400),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -108,7 +108,6 @@ class SymbolPicker(ft.Container):
             width=16, height=16, stroke_width=2,
             color=ft.Colors.CYAN_400,
         )
-
         self._loading_indicator.visible = False
 
         self.content = ft.Column(
@@ -137,8 +136,12 @@ class SymbolPicker(ft.Container):
         try:
             self._loading_indicator.visible = True
             self._loading_indicator.update()
-            from services.binance_service import binance_service
-            await binance_service.get_trading_symbols()
+            if self._repository:
+                await self._repository.get_trading_symbols()
+            else:
+                # Fallback: acceso directo (legacy)
+                from services.binance_service import binance_service
+                await binance_service.get_trading_symbols()
         except Exception as exc:
             log.error("Error loading symbols: %s", exc)
             self._loading_indicator.visible = False
@@ -174,23 +177,10 @@ class SymbolPicker(ft.Container):
                 data=s["symbol"],
                 content=ft.Row(
                     controls=[
-                        ft.Text(
-                            s["base_asset"],
-                            size=13,
-                            weight=ft.FontWeight.W_700,
-                            color=ft.Colors.WHITE,
-                        ),
-                        ft.Text(
-                            f" / {s['quote_asset']}",
-                            size=11,
-                            color=ft.Colors.BLUE_GREY_400,
-                        ),
+                        ft.Text(s["base_asset"], size=13, weight=ft.FontWeight.W_700, color=ft.Colors.WHITE),
+                        ft.Text(f" / {s['quote_asset']}", size=11, color=ft.Colors.BLUE_GREY_400),
                         ft.Container(expand=True),
-                        ft.Text(
-                            price_str,
-                            size=12,
-                            color=ft.Colors.CYAN_300,
-                        ),
+                        ft.Text(price_str, size=12, color=ft.Colors.CYAN_300),
                     ],
                     alignment=ft.MainAxisAlignment.START,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -202,12 +192,7 @@ class SymbolPicker(ft.Container):
             self._options_column.controls.append(
                 ft.Container(
                     padding=12,
-                    content=ft.Text(
-                        "Sin resultados",
-                        size=13,
-                        color=ft.Colors.BLUE_GREY_400,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
+                    content=ft.Text("Sin resultados", size=13, color=ft.Colors.BLUE_GREY_400, text_align=ft.TextAlign.CENTER),
                 )
             )
 

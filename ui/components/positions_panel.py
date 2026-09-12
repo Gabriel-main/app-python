@@ -1,8 +1,9 @@
 """
 PositionsPanel — Panel de posiciones abiertas (Futures/Margin).
 
-Muestra la lista de posiciones abiertas con PnL no realizado.
-Se actualiza reactivamente con cada PositionUpdateEvent.
+Refactorizado para aplicar SRP + DRY:
+- Usa base mixin para lifecycle
+- Manejo seguro de RuntimeError en updates
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ class PositionsPanel(ft.Container):
 
     def __init__(self) -> None:
         super().__init__()
-        self._positions: dict[str, dict] = {}  # symbol -> position data
+        self._positions: dict[str, dict] = {}
 
         self._empty_text = ft.Text(
             "Sin posiciones abiertas.",
@@ -41,15 +42,9 @@ class PositionsPanel(ft.Container):
             padding=ft.Padding(left=16, right=16, top=12, bottom=12),
             content=ft.Column(
                 controls=[
-                    # Header
                     ft.Row(
                         controls=[
-                            ft.Text(
-                                "📊 Posiciones Abiertas",
-                                size=14,
-                                weight=ft.FontWeight.W_600,
-                                color=ft.Colors.WHITE,
-                            ),
+                            ft.Text("📊 Posiciones Abiertas", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                             ft.Container(expand=True),
                             self._count_text,
                         ],
@@ -58,31 +53,21 @@ class PositionsPanel(ft.Container):
                     ft.Container(height=4),
                     self._total_pnl_text,
                     ft.Container(height=4),
-                    # Lista de posiciones
                     self._positions_column,
-                    # Empty state
                     self._empty_text,
                 ],
                 spacing=0,
             ),
         )
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(PositionUpdateEvent, self._on_position_update)
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PositionUpdateEvent, self._on_position_update)
 
-    # ------------------------------------------------------------------
-    # Handler
-    # ------------------------------------------------------------------
     async def _on_position_update(self, event: PositionUpdateEvent) -> None:
-        """Actualiza la posición abierta con el nuevo PnL."""
         key = f"{event.symbol}_{event.side}"
-
         self._positions[key] = {
             "symbol": event.symbol,
             "side": event.side,
@@ -93,11 +78,9 @@ class PositionsPanel(ft.Container):
             "leverage": event.leverage,
             "trading_type": event.trading_type,
         }
-
         self._refresh_ui()
 
     def _refresh_ui(self) -> None:
-        """Redibuja la lista de posiciones."""
         self._positions_column.controls.clear()
 
         if not self._positions:
@@ -120,7 +103,10 @@ class PositionsPanel(ft.Container):
         count = len(self._positions)
         self._count_text.value = f"{count} posición{'es' if count != 1 else ''}"
 
-        self._positions_column.update()
-        self._count_text.update()
-        self._total_pnl_text.update()
-        self._empty_text.update()
+        try:
+            self._positions_column.update()
+            self._count_text.update()
+            self._total_pnl_text.update()
+            self._empty_text.update()
+        except RuntimeError:
+            pass

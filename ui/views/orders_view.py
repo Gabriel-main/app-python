@@ -1,27 +1,27 @@
 """
 Orders View — Lista de órdenes ejecutadas.
 
-Carga el historial desde la base de datos al montar la vista.
-Se actualiza reactivamente con cada OrderExecutedEvent nuevo.
+Refactorizado para aplicar DIP:
+- Usa OrderRepository en vez de acceder a DB directamente
 """
 from __future__ import annotations
 
+import asyncio
+
 import flet as ft
-from sqlmodel import select
 
 from core.event_bus import event_bus
 from core.events import OrderExecutedEvent
-from database.connection import get_session
-from database.models import Order
 from ui.components.order_card import OrderCard
 
 
 class OrdersView(ft.Column):
     """Vista de historial de órdenes ejecutadas."""
 
-    def __init__(self) -> None:
+    def __init__(self, order_repository: object | None = None) -> None:
         super().__init__()
         self._loading = True
+        self._repository = order_repository
 
         self._list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
         self._loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3)
@@ -69,7 +69,6 @@ class OrdersView(ft.Column):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(OrderExecutedEvent, self._on_order_executed)
-        import asyncio
         asyncio.create_task(self._load_orders(), name="load_orders_view")
 
     def will_unmount(self) -> None:
@@ -80,11 +79,18 @@ class OrdersView(ft.Column):
     # ------------------------------------------------------------------
     async def _load_orders(self) -> None:
         try:
-            async with get_session() as session:
-                result = await session.exec(
-                    select(Order).order_by(Order.timestamp.desc()).limit(100)
-                )
-                orders = result.all()
+            if self._repository:
+                orders = await self._repository.get_recent_orders(100)
+            else:
+                # Fallback: acceso directo (legacy)
+                from sqlmodel import select
+                from database.connection import get_session
+                from database.models import Order
+                async with get_session() as session:
+                    result = await session.exec(
+                        select(Order).order_by(Order.timestamp.desc()).limit(100)
+                    )
+                    orders = [o.model_dump() for o in result.all()]
 
             self._list_column.controls.clear()
 
@@ -97,9 +103,7 @@ class OrdersView(ft.Column):
                 )
             else:
                 for order in orders:
-                    self._list_column.controls.append(
-                        OrderCard(order.model_dump())
-                    )
+                    self._list_column.controls.append(OrderCard(order))
 
             count = len(orders) if orders else 0
             self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
@@ -111,15 +115,17 @@ class OrdersView(ft.Column):
 
         # Ocultar loading
         self._loading_ring.visible = False
-        self._loading_ring.update()
-        self._list_column.update()
-        self._order_count_text.update()
+        try:
+            self._loading_ring.update()
+            self._list_column.update()
+            self._order_count_text.update()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Actualización reactiva
     # ------------------------------------------------------------------
     async def _on_order_executed(self, event: OrderExecutedEvent) -> None:
-        """Añade la nueva orden al tope de la lista sin recargar."""
         order_dict = {
             "order_id": event.order_id,
             "symbol": event.symbol,
@@ -140,9 +146,11 @@ class OrdersView(ft.Column):
 
         self._list_column.controls.insert(0, OrderCard(order_dict))
 
-        # Actualizar contador
         count = len(self._list_column.controls)
         self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
 
-        self._list_column.update()
-        self._order_count_text.update()
+        try:
+            self._list_column.update()
+            self._order_count_text.update()
+        except RuntimeError:
+            pass

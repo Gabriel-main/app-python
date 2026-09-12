@@ -1,10 +1,9 @@
 """
 BotStatusBar — Barra de estado del bot con señal actual y valores de MA.
 
-Suscrito a BotSignalEvent. Muestra:
-- Señal actual: BUY (verde) / SELL (rojo) / HOLD (gris)
-- MA rápida y MA lenta
-- Barra de confianza animada
+Refactorizado para aplicar:
+- SRP: Usa SIGNAL_COLORS de colors.py
+- Performance: Agrupa updates en un solo self.content.update()
 """
 from __future__ import annotations
 
@@ -12,13 +11,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import BotSignalEvent, BotStateChangedEvent
-
-
-_SIGNAL_COLORS = {
-    "BUY":  (ft.Colors.GREEN_400, ft.Colors.GREEN_900),
-    "SELL": (ft.Colors.RED_400,   ft.Colors.RED_900),
-    "HOLD": (ft.Colors.BLUE_GREY_400, ft.Colors.BLUE_GREY_900),
-}
+from ui.components.colors import SIGNAL_COLORS
 
 
 class BotStatusBar(ft.Container):
@@ -109,26 +102,27 @@ class BotStatusBar(ft.Container):
     # ------------------------------------------------------------------
     async def _on_bot_signal(self, event: BotSignalEvent) -> None:
         from config.settings import settings
-        fg, bg = _SIGNAL_COLORS.get(event.signal, _SIGNAL_COLORS["HOLD"])
+        fg, bg = SIGNAL_COLORS.get(event.signal, SIGNAL_COLORS["HOLD"])
 
         icon_map = {"BUY": ft.Icons.ARROW_UPWARD, "SELL": ft.Icons.ARROW_DOWNWARD, "HOLD": ft.Icons.REMOVE}
 
         self._signal_text.value = event.signal
         self._signal_text.color = fg
-        self._signal_text.update()
 
         self._signal_icon.name = icon_map.get(event.signal, ft.Icons.REMOVE)
         self._signal_icon.color = fg
-        self._signal_icon.update()
 
         self._ma_fast_text.value = f"MA({settings.BOT_MA_FAST}): {event.ma_fast:,.2f}"
-        self._ma_fast_text.update()
         self._ma_slow_text.value = f"MA({settings.BOT_MA_SLOW}): {event.ma_slow:,.2f}"
-        self._ma_slow_text.update()
 
         self._confidence_bar.value = event.confidence
         self._confidence_bar.color = fg
-        self._confidence_bar.update()
+
+        # Update agrupado — un solo render
+        try:
+            self.content.update()
+        except RuntimeError:
+            pass
 
     async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
         if event.is_running:
@@ -140,5 +134,7 @@ class BotStatusBar(ft.Container):
             self._bot_label.value = "BOT PAUSADO"
             self._bot_label.color = ft.Colors.GREY_600
 
-        self._bot_status_dot.update()
-        self._bot_label.update()
+        try:
+            self.content.update()
+        except RuntimeError:
+            pass

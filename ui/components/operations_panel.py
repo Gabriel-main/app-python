@@ -1,8 +1,9 @@
 """
 OperationsPanel — Panel de operaciones dual (OC/OV).
 
-Muestra las operaciones activas, pendientes y pasadas
-con entry price, stop loss, y timer de temporalidad.
+Refactorizado para aplicar DRY:
+- Usa SIDE_COLORS, STATE_COLORS, SIDE_LABELS de colors.py
+- Usa Badge para badges de lado y estado
 """
 from __future__ import annotations
 
@@ -10,6 +11,8 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import OperationState, OperationUpdateEvent
+from ui.components.colors import SIDE_COLORS, SIDE_LABELS, STATE_COLORS
+from ui.components.badges import Badge
 
 
 def _format_time(seconds: float) -> str:
@@ -23,21 +26,12 @@ def _format_time(seconds: float) -> str:
 
 def _operation_card(op: OperationState) -> ft.Container:
     """Construye una tarjeta para una operación individual."""
-    if op.side == "BUY":
-        side_color = ft.Colors.GREEN_400
-        side_bg = ft.Colors.GREEN_900
-        side_label = "COMPRA"
-    else:
-        side_color = ft.Colors.RED_400
-        side_bg = ft.Colors.RED_900
-        side_label = "VENTA"
+    side_fg, side_bg = SIDE_COLORS.get(op.side, (ft.Colors.WHITE, ft.Colors.GREY_800))
+    side_label = SIDE_LABELS.get(op.side, op.side)
 
-    state_colors = {
-        "ACTIVE": (ft.Colors.GREEN_400, ft.Colors.GREEN_900, "ACTIVA"),
-        "PENDING": (ft.Colors.AMBER_400, ft.Colors.AMBER_900, "PENDIENTE"),
-        "PAST": (ft.Colors.BLUE_GREY_400, ft.Colors.BLUE_GREY_800, "PASADA"),
-    }
-    st_color, st_bg, st_label = state_colors.get(op.state, (ft.Colors.WHITE, ft.Colors.GREY_800, op.state))
+    st_fg, st_bg, st_label = STATE_COLORS.get(
+        op.state, (ft.Colors.WHITE, ft.Colors.GREY_800, op.state)
+    )
 
     return ft.Container(
         bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
@@ -49,24 +43,10 @@ def _operation_card(op: OperationState) -> ft.Container:
                 # Fila superior: lado + estado
                 ft.Row(
                     controls=[
-                        ft.Container(
-                            content=ft.Text(f"{side_label}", size=11, weight=ft.FontWeight.BOLD, color=side_color),
-                            bgcolor=side_bg,
-                            border_radius=6,
-                            padding=ft.Padding(left=8, right=8, top=3, bottom=3),
-                        ),
-                        ft.Container(
-                            content=ft.Text(st_label, size=10, weight=ft.FontWeight.W_500, color=st_color),
-                            bgcolor=st_bg,
-                            border_radius=4,
-                            padding=ft.Padding(left=6, right=6, top=2, bottom=2),
-                        ),
+                        Badge(label=side_label, fg_color=side_fg, bg_color=side_bg),
+                        Badge(label=st_label, fg_color=st_fg, bg_color=st_bg, border_radius=4),
                         ft.Container(expand=True),
-                        ft.Text(
-                            op.order_id,
-                            size=9,
-                            color=ft.Colors.BLUE_GREY_500,
-                        ),
+                        ft.Text(op.order_id, size=9, color=ft.Colors.BLUE_GREY_500),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -79,16 +59,14 @@ def _operation_card(op: OperationState) -> ft.Container:
                                 ft.Text("Entry", size=9, color=ft.Colors.BLUE_GREY_500),
                                 ft.Text(f"${op.entry_price:,.4f}", size=12, color=ft.Colors.WHITE),
                             ],
-                            spacing=1,
-                            expand=True,
+                            spacing=1, expand=True,
                         ),
                         ft.Column(
                             controls=[
                                 ft.Text("Stop Loss", size=9, color=ft.Colors.BLUE_GREY_500),
                                 ft.Text(f"${op.stop_loss:,.4f}", size=12, color=ft.Colors.RED_400),
                             ],
-                            spacing=1,
-                            expand=True,
+                            spacing=1, expand=True,
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         ft.Column(
@@ -96,8 +74,7 @@ def _operation_card(op: OperationState) -> ft.Container:
                                 ft.Text("Cantidad", size=9, color=ft.Colors.BLUE_GREY_500),
                                 ft.Text(f"{op.quantity:.6f}", size=12, color=ft.Colors.WHITE),
                             ],
-                            spacing=1,
-                            expand=True,
+                            spacing=1, expand=True,
                             horizontal_alignment=ft.CrossAxisAlignment.END,
                         ),
                     ],
@@ -204,7 +181,10 @@ class OperationsPanel(ft.Container):
                 self._timer_text.value = ""
                 self._timer_bar.value = 0.0
 
-        self._operations_column.update()
-        self._timer_text.update()
-        self._timer_bar.update()
-        self._empty_text.update()
+        try:
+            self._operations_column.update()
+            self._timer_text.update()
+            self._timer_bar.update()
+            self._empty_text.update()
+        except RuntimeError:
+            pass

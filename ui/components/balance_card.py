@@ -1,8 +1,9 @@
 """
 BalanceCard — Card de fondos/cuenta del usuario.
 
-Muestra el saldo de la cuenta según TRADING_TYPE (Spot/Futures/Margin).
-Se actualiza automáticamente con BalanceUpdateEvent (auto-refresh).
+Refactorizado para aplicar OCP + SRP:
+- Usa BalanceDisplayStrategy para formatos por trading type
+- Agregar tipo = crear clase, no modificar if/elif/else
 """
 from __future__ import annotations
 
@@ -13,16 +14,13 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BalanceUpdateEvent, SettingsUpdatedEvent
-
-
-def _format_amount(value: float) -> str:
-    """Formatea un monto con separadores de miles."""
-    if value >= 1000:
-        return f"${value:,.2f}"
-    elif value >= 1:
-        return f"${value:.4f}"
-    else:
-        return f"${value:.6f}"
+from ui.components.balance_display import (
+    get_strategy,
+    format_amount,
+    BalanceDisplayStrategy,
+)
+from ui.components.badges import Badge
+from ui.components.colors import TRADING_TYPE_COLORS
 
 
 class BalanceCard(ft.Container):
@@ -31,37 +29,32 @@ class BalanceCard(ft.Container):
     def __init__(self) -> None:
         super().__init__()
         self._last_update: float = 0.0
+        self._strategy: BalanceDisplayStrategy = get_strategy(settings.TRADING_TYPE)
 
         # Badge de tipo
-        self._type_badge = ft.Container(
-            content=ft.Text("SPOT", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_400),
-            bgcolor=ft.Colors.BLUE_900,
-            border_radius=6,
-            padding=ft.Padding(left=8, right=8, top=3, bottom=3),
+        type_info = TRADING_TYPE_COLORS.get(settings.TRADING_TYPE, TRADING_TYPE_COLORS["SPOT"])
+        self._type_badge = Badge(
+            label=type_info[2], fg_color=type_info[0], bg_color=type_info[1]
         )
 
         # Textos de saldo
-        self._label_1 = ft.Text("Disponible", size=11, color=ft.Colors.BLUE_GREY_400)
+        labels = self._strategy.get_labels()
+        self._label_1 = ft.Text(labels[0], size=11, color=ft.Colors.BLUE_GREY_400)
         self._value_1 = ft.Text("---", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
 
-        self._label_2 = ft.Text("Bloqueado", size=11, color=ft.Colors.BLUE_GREY_400)
+        self._label_2 = ft.Text(labels[1] or "", size=11, color=ft.Colors.BLUE_GREY_400)
         self._value_2 = ft.Text("---", size=13, color=ft.Colors.BLUE_GREY_300)
 
-        self._label_3 = ft.Text("", size=11, color=ft.Colors.BLUE_GREY_400)
+        self._label_3 = ft.Text(labels[2] or "", size=11, color=ft.Colors.BLUE_GREY_400)
         self._value_3 = ft.Text("", size=13, color=ft.Colors.BLUE_GREY_300)
 
         # Timestamp
-        self._time_text = ft.Text(
-            "Sin datos",
-            size=9,
-            color=ft.Colors.BLUE_GREY_500,
-        )
+        self._time_text = ft.Text("Sin datos", size=9, color=ft.Colors.BLUE_GREY_500)
 
         # Loading indicator
         self._loading = ft.ProgressRing(
             width=14, height=14, stroke_width=2,
-            color=ft.Colors.CYAN_400,
-            visible=False,
+            color=ft.Colors.CYAN_400, visible=False,
         )
 
         self.bgcolor = ft.Colors.with_opacity(0.06, ft.Colors.WHITE)
@@ -87,8 +80,7 @@ class BalanceCard(ft.Container):
                     controls=[
                         ft.Column(
                             controls=[self._label_1, self._value_1],
-                            spacing=2,
-                            expand=True,
+                            spacing=2, expand=True,
                         ),
                     ],
                 ),
@@ -98,8 +90,7 @@ class BalanceCard(ft.Container):
                     controls=[
                         ft.Column(
                             controls=[self._label_2, self._value_2],
-                            spacing=2,
-                            expand=True,
+                            spacing=2, expand=True,
                         ),
                     ],
                 ),
@@ -109,8 +100,7 @@ class BalanceCard(ft.Container):
                     controls=[
                         ft.Column(
                             controls=[self._label_3, self._value_3],
-                            spacing=2,
-                            expand=True,
+                            spacing=2, expand=True,
                         ),
                     ],
                     visible=False,
@@ -124,108 +114,70 @@ class BalanceCard(ft.Container):
     def did_mount(self) -> None:
         event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
-        self._sync_from_settings()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
 
     def _sync_from_settings(self) -> None:
-        """Re-sincroniza badge y labels desde settings (did_mount + handler)."""
-        self._update_badge(settings.TRADING_TYPE)
-        self._update_values_for_type(settings.TRADING_TYPE)
-        self.update()
+        """Re-sincroniza strategy y badge desde settings."""
+        self._strategy = get_strategy(settings.TRADING_TYPE)
+        type_info = TRADING_TYPE_COLORS.get(settings.TRADING_TYPE, TRADING_TYPE_COLORS["SPOT"])
+        self._type_badge.update_label(type_info[2], fg_color=type_info[0], bg_color=type_info[1])
+        self._apply_labels()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _apply_labels(self) -> None:
+        """Aplica los labels de la estrategia actual."""
+        labels = self._strategy.get_labels()
+        self._label_1.value = labels[0]
+        self._label_2.value = labels[1] or ""
+        self._label_2.visible = labels[1] is not None
+        self._value_2.visible = labels[1] is not None
+        self._label_3.value = labels[2] or ""
+        self._label_3.visible = False
+        self._value_3.visible = False
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         """Actualiza valores con datos reales del balance."""
         self._last_update = event.timestamp
         self._loading.visible = False
-        self._update_values(event)
+
+        v1, v2, v3 = self._strategy.format_values(event)
+        self._value_1.value = v1
+        self._value_2.value = v2 or "---"
+
+        if v3 is not None:
+            self._label_3.visible = True
+            self._value_3.visible = True
+            self._value_3.value = v3
+            # Color verde/rojo para PnL
+            pnl_val = event.unrealized_pnl if hasattr(event, "unrealized_pnl") else 0
+            self._value_3.color = ft.Colors.GREEN_400 if pnl_val >= 0 else ft.Colors.RED_400
+        else:
+            self._label_3.visible = False
+            self._value_3.visible = False
+
         self._update_timestamp()
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Actualiza badge, labels y muestra indicador de carga."""
         self._sync_from_settings()
         self._loading.visible = True
         self._time_text.value = f"Cargando saldo de {event.trading_type}..."
-        self.update()
-
-    def _update_badge(self, trading_type: str) -> None:
-        """Actualiza el badge según TRADING_TYPE."""
-        type_colors = {
-            "SPOT": (ft.Colors.BLUE_400, ft.Colors.BLUE_900, "SPOT"),
-            "FUTURES": (ft.Colors.PURPLE_400, ft.Colors.PURPLE_900, "FUTURES"),
-            "MARGIN": (ft.Colors.ORANGE_400, ft.Colors.ORANGE_900, "MARGIN"),
-        }
-        color, bg, label = type_colors.get(trading_type, (ft.Colors.BLUE_400, ft.Colors.BLUE_900, "SPOT"))
-        self._type_badge.content = ft.Text(label, size=10, weight=ft.FontWeight.BOLD, color=color)
-        self._type_badge.bgcolor = bg
-
-    def _update_values(self, event: BalanceUpdateEvent) -> None:
-        """Actualiza los valores según TRADING_TYPE."""
-        # Resetear
-        self._label_2.visible = True
-        self._value_2.visible = True
-        self._label_3.visible = False
-        self._value_3.visible = False
-
-        if event.trading_type == "FUTURES":
-            self._label_1.value = "Wallet"
-            self._value_1.value = _format_amount(event.free)
-            self._label_2.value = "Disponible"
-            self._value_2.value = _format_amount(event.available)
-            if event.unrealized_pnl != 0:
-                self._label_3.value = "PnL No Real."
-                pnl_color = ft.Colors.GREEN_400 if event.unrealized_pnl >= 0 else ft.Colors.RED_400
-                sign = "+" if event.unrealized_pnl >= 0 else ""
-                self._value_3.value = f"{sign}{_format_amount(event.unrealized_pnl)}"
-                self._value_3.color = pnl_color
-                self._label_3.visible = True
-                self._value_3.visible = True
-
-        elif event.trading_type == "MARGIN":
-            self._label_1.value = "Net Asset"
-            self._value_1.value = _format_amount(event.free)
-            self._label_2.value = "Prestado"
-            self._value_2.value = _format_amount(event.borrowed)
-            if event.interest > 0:
-                self._label_3.value = "Interés"
-                self._value_3.value = _format_amount(event.interest)
-                self._label_3.visible = True
-                self._value_3.visible = True
-
-        else:  # SPOT
-            self._label_1.value = "Disponible"
-            self._value_1.value = _format_amount(event.free)
-            self._label_2.value = "Bloqueado"
-            self._value_2.value = _format_amount(event.locked)
-
-    def _update_values_for_type(self, trading_type: str) -> None:
-        """Actualiza los labels según TRADING_TYPE (sin datos numéricos)."""
-        self._label_2.visible = True
-        self._value_2.visible = True
-        self._label_3.visible = False
-        self._value_3.visible = False
-
-        if trading_type == "FUTURES":
-            self._label_1.value = "Wallet"
-            self._value_1.value = "---"
-            self._label_2.value = "Disponible"
-            self._value_2.value = "---"
-        elif trading_type == "MARGIN":
-            self._label_1.value = "Net Asset"
-            self._value_1.value = "---"
-            self._label_2.value = "Prestado"
-            self._value_2.value = "---"
-        else:  # SPOT
-            self._label_1.value = "Disponible"
-            self._value_1.value = "---"
-            self._label_2.value = "Bloqueado"
-            self._value_2.value = "---"
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
     def _update_timestamp(self) -> None:
-        """Actualiza el timestamp de la última actualización."""
         elapsed = time.time() - self._last_update
         if elapsed < 5:
             self._time_text.value = "Actualizado ahora"

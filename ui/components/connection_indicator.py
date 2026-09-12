@@ -1,8 +1,9 @@
 """
 ConnectionIndicator — Indicador visual de estado del WebSocket.
 
-Suscrito a ConnectionStatusEvent. Muestra un punto de color animado
-con el texto de estado de la conexión.
+Refactorizado para aplicar:
+- DRY: Usa CONNECTION_COLORS de colors.py
+- Performance: Agrupa updates en un solo self.update()
 """
 from __future__ import annotations
 
@@ -10,14 +11,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import ConnectionStatusEvent
-
-
-_STATUS_CONFIG = {
-    "CONNECTING":   (ft.Colors.AMBER_400,     ft.Icons.WIFI_FIND,     "Conectando..."),
-    "CONNECTED":    (ft.Colors.GREEN_400,      ft.Icons.WIFI,          "Conectado"),
-    "DISCONNECTED": (ft.Colors.RED_400,        ft.Icons.WIFI_OFF,      "Desconectado"),
-    "RECONNECTING": (ft.Colors.ORANGE_400,     ft.Icons.WIFI_TETHERING,"Reconectando..."),
-}
+from ui.components.colors import CONNECTION_COLORS
 
 
 class ConnectionIndicator(ft.Row):
@@ -52,18 +46,19 @@ class ConnectionIndicator(ft.Row):
     # Handler
     # ------------------------------------------------------------------
     async def _on_connection_status(self, event: ConnectionStatusEvent) -> None:
-        color, icon, default_text = _STATUS_CONFIG.get(
-            event.status, (ft.Colors.GREY_400, ft.Icons.HELP, event.status)
+        color, icon_name, default_text = CONNECTION_COLORS.get(
+            event.status, (ft.Colors.GREY_400, "help", event.status)
         )
         text = event.message or default_text
 
         self._dot.bgcolor = color
-        self._dot.update()
-
-        self._icon.name = icon
+        self._icon.name = icon_name
         self._icon.color = color
-        self._icon.update()
-
         self._label.value = text
         self._label.color = color
-        self._label.update()
+
+        # Update agrupado — un solo render
+        try:
+            self.update()
+        except RuntimeError:
+            pass
