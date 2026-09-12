@@ -238,6 +238,9 @@ class SymbolPicker(ft.Container):
     def get_selected_symbol(self) -> str:
         return self._trigger_label.value or settings.TRADING_SYMBOL
 
+    def set_symbol(self, symbol: str) -> None:
+        self._trigger_label.value = symbol
+
     def refresh_symbols(self) -> None:
         self._loading_indicator.visible = True
         self._loading_indicator.update()

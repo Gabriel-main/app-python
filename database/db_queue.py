@@ -195,6 +195,7 @@ class DBQueueWorker:
                     quantity=event.quantity,
                     price=event.price,
                     mode=event.mode,
+                    entry_price=event.entry_price,
                     trading_type=event.trading_type,
                     leverage=event.leverage,
                     order_type=event.order_type,

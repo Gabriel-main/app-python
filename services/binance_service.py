@@ -177,6 +177,10 @@ class BinanceService:
 
         try:
             self._client = await create_client()
+            log.info(
+                "Creating %s stream for %s...",
+                settings.TRADING_TYPE, settings.TRADING_SYMBOL,
+            )
 
             bm = BinanceSocketManager(self._client)
             symbol_lower = settings.TRADING_SYMBOL.lower()
@@ -210,7 +214,10 @@ class BinanceService:
                     db_queue.enqueue_tick(tick)
 
         except (BinanceAPIException, BinanceRequestException) as exc:
-            log.error("Binance API exception: %s", exc)
+            log.error("Binance API exception (%s): %s", settings.TRADING_TYPE, exc)
+            raise
+        except Exception as exc:
+            log.error("Stream error (%s): %s", settings.TRADING_TYPE, exc)
             raise
         finally:
             await self._close_client()
@@ -355,11 +362,13 @@ class BinanceService:
 
         # En PAPER mode o sin API keys, retornar saldo mock
         if settings.TRADING_MODE == "PAPER" or not settings.has_api_keys():
+            from services.paper_balance import paper_balance
+            balance = paper_balance.get_balance()
             event = BalanceUpdateEvent(
                 asset=asset,
                 trading_type=settings.TRADING_TYPE,
-                free=10000.0,
-                available=10000.0,
+                free=balance,
+                available=balance,
             )
             self._balance_cache = event
             self._balance_cache_time = now

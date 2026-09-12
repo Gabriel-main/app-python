@@ -83,6 +83,14 @@ class SettingsView(ft.Column):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         self._page = self.page
+        # Re-sincronizar campos del formulario desde settings
+        self._mode_section.sync_from_settings()
+        self._type_section.sync_from_settings()
+        self._params_section.sync_from_settings()
+        # Sincronizar estado actual del bot (no solo eventos futuros)
+        from services.bot_engine import bot_engine
+        self._bot_active = bot_engine.is_active
+        self._update_form_lock()
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
 
     def will_unmount(self) -> None:
@@ -190,10 +198,10 @@ class SettingsView(ft.Column):
     def _on_cancel(self, e: ft.ControlEvent) -> None:
         ConfirmDialogHelper.close(self._confirm_dialog, self.page)
 
-    def _on_confirm(self, e: ft.ControlEvent) -> None:
-        self._apply_changes()
+    async def _on_confirm(self, e: ft.ControlEvent) -> None:
+        await self._apply_changes()
 
-    def _apply_changes(self) -> None:
+    async def _apply_changes(self) -> None:
         if self._confirm_dialog:
             self._confirm_dialog.content = ft.Column(
                 controls=[
@@ -215,7 +223,7 @@ class SettingsView(ft.Column):
 
         try:
             self._persistence.save_sensitive(form.api_key, form.api_secret)
-            asyncio.create_task(self._save_config_to_db(form))
+            await self._save_config_to_db(form)
             self._update_settings_from_form(form)
 
             event_bus.publish(SettingsUpdatedEvent(

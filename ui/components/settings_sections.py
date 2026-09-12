@@ -235,6 +235,18 @@ class TradingModeSection(ft.Container):
         except RuntimeError:
             pass
 
+    def sync_from_settings(self) -> None:
+        """Re-sincroniza widgets desde el settings singleton."""
+        self.restore({
+            "mode": settings.TRADING_MODE,
+            "api_key": settings.BINANCE_API_KEY,
+            "api_secret": settings.BINANCE_API_SECRET,
+        })
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Section: Trading Type
@@ -352,6 +364,19 @@ class TradingTypeSection(ft.Container):
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
         _set_fields_disabled(self, disabled)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def sync_from_settings(self) -> None:
+        """Re-sincroniza widgets desde el settings singleton."""
+        self.restore({
+            "trading_type": settings.TRADING_TYPE,
+            "leverage": settings.LEVERAGE,
+            "order_type": settings.ORDER_TYPE,
+            "limit_price": settings.LIMIT_PRICE,
+        })
         try:
             self.update()
         except RuntimeError:
@@ -499,6 +524,22 @@ class OperationParamsSection(ft.Container):
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
         _set_fields_disabled(self, disabled)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def sync_from_settings(self) -> None:
+        """Re-sincroniza widgets desde el settings singleton."""
+        self.restore({
+            "amount": settings.TRADE_AMOUNT,
+            "currency": settings.TRADE_CURRENCY,
+            "sl": settings.STOP_LOSS,
+            "sl_type": settings.STOP_LOSS_TYPE,
+            "timeframe": settings.TIMEFRAME,
+            "tf_unit": settings.TIMEFRAME_UNIT,
+        })
+        self._symbol_picker.set_symbol(settings.TRADING_SYMBOL)
         try:
             self.update()
         except RuntimeError:

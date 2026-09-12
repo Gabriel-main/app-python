@@ -100,6 +100,15 @@ class BotEngine:
         self._timeframe_duration: float = 0.0  # segundos
 
     # ------------------------------------------------------------------
+    # Consulta de estado
+    # ------------------------------------------------------------------
+
+    @property
+    def is_active(self) -> bool:
+        """True si el bot está operando activamente."""
+        return self._active
+
+    # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
 
@@ -579,6 +588,7 @@ class BotEngine:
                 quantity=op.quantity,
                 price=trigger_price,
                 mode="PAPER",
+                entry_price=op.entry_price,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",
@@ -620,6 +630,7 @@ class BotEngine:
                     quantity=op.quantity,
                     price=op.entry_price,
                     mode="PAPER",
+                    entry_price=op.entry_price,
                     trading_type=settings.TRADING_TYPE,
                     leverage=settings.LEVERAGE,
                     order_type="MARKET",
@@ -668,6 +679,7 @@ class BotEngine:
                 quantity=op.quantity,
                 price=fill_price,
                 mode="LIVE",
+                entry_price=op.entry_price,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",
@@ -707,6 +719,7 @@ class BotEngine:
                 quantity=op.quantity,
                 price=fill_price,
                 mode="LIVE",
+                entry_price=op.entry_price,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",

@@ -30,6 +30,7 @@ from services.binance_service import binance_service
 from services.bot_engine import bot_engine
 from services.config_service import config_service
 from services.audit_service import audit_service
+from services.paper_balance import paper_balance
 from repositories.order_repository import SQLOrderRepository
 from ui.views.dashboard_view import DashboardView
 from ui.views.orders_view import OrdersView
@@ -173,6 +174,7 @@ async def main(page: ft.Page) -> None:
     await event_bus.start()
     await db_queue.start()
     await audit_service.start()
+    await paper_balance.start()
     await bot_engine.start()
     await binance_service.start()
 
@@ -185,6 +187,7 @@ async def main(page: ft.Page) -> None:
     async def on_disconnect(e: ft.ControlEvent) -> None:
         await binance_service.stop()
         await bot_engine.stop()
+        await paper_balance.stop()
         await audit_service.stop()
         await db_queue.stop()
         await event_bus.stop()
