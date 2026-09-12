@@ -1,16 +1,20 @@
 """
 PriceTicker — Widget reactivo de precio en tiempo real.
 
-Suscrito a PriceTickEvent. Muestra precio actual con animación
-de flash verde (subida) / rojo (bajada) en cada tick.
-
-Regla: Solo actualiza los controles específicos (price_text.update()).
+Suscrito a PriceTickEvent y SettingsUpdatedEvent.
+Muestra precio actual con animación de flash verde (subida) / rojo (bajada).
+Actualiza símbolo cuando cambian los settings.
 """
 from __future__ import annotations
 
+import logging
+
 import flet as ft
+from config.settings import settings
 from core.event_bus import event_bus
-from core.events import PriceTickEvent
+from core.events import PriceTickEvent, SettingsUpdatedEvent
+
+log = logging.getLogger(__name__)
 
 
 class PriceTicker(ft.Column):
@@ -66,9 +70,21 @@ class PriceTicker(ft.Column):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._sync_symbol()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+
+    def _sync_symbol(self) -> None:
+        """Re-sincroniza símbolo desde settings (did_mount + handler)."""
+        if settings.TRADING_SYMBOL != self.symbol:
+            self.symbol = settings.TRADING_SYMBOL
+            self._symbol_label.value = self.symbol
+            self._last_price = 0.0
+            self._price_text.value = "---"
+            self.update()
 
     # ------------------------------------------------------------------
     # Responsive — se llama desde DashboardView._on_resize
@@ -85,9 +101,11 @@ class PriceTicker(ft.Column):
         self._price_text.update()
 
     # ------------------------------------------------------------------
-    # Handler
+    # Handlers
     # ------------------------------------------------------------------
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
+        log.debug("PriceTicker: tick received - event.symbol=%s, self.symbol=%s",
+                  event.symbol, self.symbol)
         if event.symbol != self.symbol:
             return
 
@@ -107,3 +125,9 @@ class PriceTicker(ft.Column):
         self._change_badge.content.value = f"{sign}{event.change_pct:.2f}%"
         self._change_badge.bgcolor = change_color
         self._change_badge.update()
+
+    async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
+        """Actualiza símbolo cuando cambian los settings."""
+        log.info("PriceTicker: settings updated - event.symbol=%s, self.symbol=%s",
+                 event.symbol, self.symbol)
+        self._sync_symbol()

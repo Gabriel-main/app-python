@@ -13,6 +13,8 @@ Incluye:
 """
 from __future__ import annotations
 
+import logging
+
 import flet as ft
 
 from config.settings import settings
@@ -24,6 +26,8 @@ from ui.components.connection_indicator import ConnectionIndicator
 from ui.components.mini_chart import MiniChart
 from ui.components.operations_panel import OperationsPanel
 from ui.components.price_ticker import PriceTicker
+
+log = logging.getLogger(__name__)
 
 
 class DashboardView(ft.Column):
@@ -60,21 +64,6 @@ class DashboardView(ft.Column):
         )
 
         # --- Layout ---
-        trading_type_colors = {
-            "SPOT": (ft.Colors.BLUE_400, ft.Colors.BLUE_900),
-            "FUTURES": (ft.Colors.PURPLE_400, ft.Colors.PURPLE_900),
-            "MARGIN": (ft.Colors.ORANGE_400, ft.Colors.ORANGE_900),
-        }
-        tt_color, tt_bg = trading_type_colors.get(settings.TRADING_TYPE, (ft.Colors.BLUE_400, ft.Colors.BLUE_900))
-
-        self._trading_type_badge = ft.Container(
-            content=ft.Text(settings.TRADING_TYPE, size=10, weight=ft.FontWeight.BOLD, color=tt_color),
-            bgcolor=tt_bg,
-            border=ft.Border.all(1, tt_color),
-            border_radius=6,
-            padding=ft.Padding(left=8, right=8, top=3, bottom=3),
-        )
-
         mode_color = ft.Colors.AMBER_400 if settings.TRADING_MODE == "PAPER" else ft.Colors.RED_400
         self._mode_badge = ft.Container(
             content=ft.Text(settings.TRADING_MODE, size=11, weight=ft.FontWeight.BOLD, color=mode_color),
@@ -82,6 +71,7 @@ class DashboardView(ft.Column):
             border=ft.Border.all(1, mode_color),
             border_radius=6,
             padding=ft.Padding(left=10, right=10, top=4, bottom=4),
+            tooltip="Paper = Simulado | Live = Real",
         )
 
         self.controls = [
@@ -101,8 +91,6 @@ class DashboardView(ft.Column):
                         spacing=2,
                     ),
                     ft.Container(expand=True),
-                    self._trading_type_badge,
-                    ft.Container(width=6),
                     self._mode_badge,
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.START,
@@ -188,26 +176,20 @@ class DashboardView(ft.Column):
     def did_mount(self) -> None:
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
-        self._sync_badges()
+        self._sync_from_settings()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
 
+    def _sync_from_settings(self) -> None:
+        """Re-sincroniza estado desde settings (llamar en did_mount)."""
+        self._sync_badges()
+        self._ticker.symbol = settings.TRADING_SYMBOL
+        self._chart.symbol = settings.TRADING_SYMBOL
+
     def _sync_badges(self) -> None:
         """Sincroniza badges con los valores actuales de settings."""
-        trading_type_colors = {
-            "SPOT": (ft.Colors.BLUE_400, ft.Colors.BLUE_900),
-            "FUTURES": (ft.Colors.PURPLE_400, ft.Colors.PURPLE_900),
-            "MARGIN": (ft.Colors.ORANGE_400, ft.Colors.ORANGE_900),
-        }
-        tt_color, tt_bg = trading_type_colors.get(settings.TRADING_TYPE, (ft.Colors.BLUE_400, ft.Colors.BLUE_900))
-        self._trading_type_badge.content.value = settings.TRADING_TYPE
-        self._trading_type_badge.content.color = tt_color
-        self._trading_type_badge.bgcolor = tt_bg
-        self._trading_type_badge.border = ft.Border.all(1, tt_color)
-        self._trading_type_badge.update()
-
         mode_color = ft.Colors.AMBER_400 if settings.TRADING_MODE == "PAPER" else ft.Colors.RED_400
         self._mode_badge.content.value = settings.TRADING_MODE
         self._mode_badge.content.color = mode_color
@@ -238,6 +220,7 @@ class DashboardView(ft.Column):
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
         if event.symbol != settings.TRADING_SYMBOL:
             return
+        log.debug("DashboardView: price tick - symbol=%s, price=%.2f", event.symbol, event.price)
         # Actualizar stats 24h individualmente
         self._high_text.value = f"${event.high_24h:,.2f}"
         self._high_text.update()
@@ -250,31 +233,9 @@ class DashboardView(ft.Column):
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Actualiza badges del header al cambiar configuración."""
-        trading_type_colors = {
-            "SPOT": (ft.Colors.BLUE_400, ft.Colors.BLUE_900),
-            "FUTURES": (ft.Colors.PURPLE_400, ft.Colors.PURPLE_900),
-            "MARGIN": (ft.Colors.ORANGE_400, ft.Colors.ORANGE_900),
-        }
-        tt_color, tt_bg = trading_type_colors.get(event.trading_type, (ft.Colors.BLUE_400, ft.Colors.BLUE_900))
-        self._trading_type_badge.content.value = event.trading_type
-        self._trading_type_badge.content.color = tt_color
-        self._trading_type_badge.bgcolor = tt_bg
-        self._trading_type_badge.border = ft.Border.all(1, tt_color)
-        self._trading_type_badge.update()
-
-        mode_color = ft.Colors.AMBER_400 if event.mode == "PAPER" else ft.Colors.RED_400
-        self._mode_badge.content.value = event.mode
-        self._mode_badge.content.color = mode_color
-        self._mode_badge.bgcolor = ft.Colors.with_opacity(0.15, mode_color)
-        self._mode_badge.border = ft.Border.all(1, mode_color)
-        self._mode_badge.update()
-
-    def _on_symbol_changed(self, symbol: str) -> None:
-        """Cuando el usuario cambia el símbolo, actualizar ticker y chart."""
-        self._ticker.symbol = symbol
-        self._chart.symbol = symbol
-        self._ticker.update()
-        self._chart.update()
+        log.info("DashboardView: settings updated - symbol=%s, trading_type=%s, mode=%s",
+                 event.symbol, event.trading_type, event.mode)
+        self._sync_from_settings()
 
     def _toggle_bot(self, e: ft.ControlEvent) -> None:
         """Inicia o detiene el bot de trading."""

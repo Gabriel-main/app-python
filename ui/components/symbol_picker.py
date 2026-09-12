@@ -163,7 +163,7 @@ class SymbolPicker(ft.Container):
             else:
                 price_str = f"${price:.8f}"
 
-            is_selected = s["symbol"] == settings.TRADING_SYMBOL
+            is_selected = s["symbol"] == self.get_selected_symbol()
 
             opt = ft.Container(
                 bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE) if not is_selected
@@ -241,8 +241,7 @@ class SymbolPicker(ft.Container):
 
     def _on_option_click(self, e: ft.ControlEvent) -> None:
         symbol = e.control.data
-        if symbol and symbol != settings.TRADING_SYMBOL:
-            settings.TRADING_SYMBOL = symbol
+        if symbol and symbol != self.get_selected_symbol():
             self._trigger_label.value = symbol
             log.info("Symbol changed to: %s", symbol)
             if self._on_symbol_changed:

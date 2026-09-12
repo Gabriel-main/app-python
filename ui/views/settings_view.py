@@ -12,14 +12,34 @@ Al guardar: muestra modal de confirmación, luego publica SettingsUpdatedEvent.
 """
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import dataclass
 
 import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import SettingsUpdatedEvent
+from services.env_service import EnvService
 from ui.components.symbol_picker import SymbolPicker
+
+
+@dataclass(frozen=True)
+class SettingsFormData:
+    """DTO inmutable con valores del formulario de configuración."""
+    symbol: str
+    mode: str
+    trading_type: str
+    leverage: int
+    order_type: str
+    limit_price: float
+    api_key: str
+    api_secret: str
+    amount: float
+    currency: str
+    sl: float
+    sl_type: str
+    timeframe: int
+    tf_unit: str
 
 
 class SettingsView(ft.Column):
@@ -419,17 +439,9 @@ class SettingsView(ft.Column):
         self._update_save_button_state()
 
     def _on_symbol_changed(self, symbol: str) -> None:
-        """Cuando el usuario cambia el símbolo, actualizar settings."""
-        settings.TRADING_SYMBOL = symbol
         self._update_save_button_state()
 
     def _on_currency_changed(self, e: ft.ControlEvent) -> None:
-        """Cuando cambia la moneda, limpiar caché y recargar símbolos filtrados."""
-        currency = e.control.value or "USDT"
-        settings.TRADE_CURRENCY = currency
-        from services.binance_service import binance_service
-        binance_service.clear_symbols_cache()
-        self._symbol_picker.refresh_symbols()
         self._update_save_button_state()
 
     def _on_save(self, e: ft.ControlEvent) -> None:
@@ -535,9 +547,56 @@ class SettingsView(ft.Column):
         self._confirm_dialog.open = True
         self._confirm_dialog.update()
 
+    # ------------------------------------------------------------------
+    # Form helpers
+    # ------------------------------------------------------------------
+    def _build_form_data(self) -> SettingsFormData:
+        """Extrae valores del formulario como DTO inmutable."""
+        return SettingsFormData(
+            symbol=self._symbol_picker.get_selected_symbol(),
+            mode=self._mode_dropdown.value or "PAPER",
+            trading_type=self._trading_type_dropdown.value or "SPOT",
+            leverage=int(self._leverage_dropdown.value or "1"),
+            order_type=self._order_type_dropdown.value or "MARKET",
+            limit_price=float(self._limit_price_field.value or "0"),
+            api_key=self._api_key_field.value or "",
+            api_secret=self._api_secret_field.value or "",
+            amount=float(self._amount_field.value or "10.0"),
+            currency=self._currency_dropdown.value or "USDT",
+            sl=float(self._sl_field.value or "1.01"),
+            sl_type=self._sl_type_dropdown.value or "PERCENT",
+            timeframe=int(self._timeframe_field.value or "1"),
+            tf_unit=self._timeframe_unit_dropdown.value or "MINUTES",
+        )
+
+    def _build_env_snapshot(self) -> dict:
+        """Snapshot de .env para rollback en caso de error."""
+        return {
+            "BINANCE_API_KEY": settings.BINANCE_API_KEY,
+            "BINANCE_API_SECRET": settings.BINANCE_API_SECRET,
+        }
+
+    def _update_settings_from_form(self, form: SettingsFormData) -> None:
+        """Actualiza settings en memoria desde el DTO del formulario."""
+        settings.reload_from_env()
+        settings.TRADING_SYMBOL = form.symbol
+        settings.TRADING_MODE = form.mode
+        settings.TRADING_TYPE = form.trading_type
+        settings.LEVERAGE = form.leverage
+        settings.ORDER_TYPE = form.order_type
+        settings.LIMIT_PRICE = form.limit_price
+        settings.TRADE_AMOUNT = form.amount
+        settings.TRADE_CURRENCY = form.currency
+        settings.STOP_LOSS = form.sl
+        settings.STOP_LOSS_TYPE = form.sl_type
+        settings.TIMEFRAME = form.timeframe
+        settings.TIMEFRAME_UNIT = form.tf_unit
+
+    # ------------------------------------------------------------------
+    # Apply changes
+    # ------------------------------------------------------------------
     def _apply_changes(self) -> None:
         """Aplica los cambios después de confirmar en el modal."""
-        # Mostrar spinner mientras se procesa
         self._confirm_dialog.content = ft.Column(
             controls=[
                 ft.ProgressRing(width=28, height=28, stroke_width=3),
@@ -552,124 +611,42 @@ class SettingsView(ft.Column):
         self._confirm_dialog.actions = []
         self._confirm_dialog.update()
 
-        # Guardar snapshot para rollback
-        snapshot = {
-            "TRADING_MODE": settings.TRADING_MODE,
-            "TRADING_TYPE": settings.TRADING_TYPE,
-            "LEVERAGE": settings.LEVERAGE,
-            "ORDER_TYPE": settings.ORDER_TYPE,
-            "LIMIT_PRICE": settings.LIMIT_PRICE,
-            "BINANCE_API_KEY": settings.BINANCE_API_KEY,
-            "BINANCE_API_SECRET": settings.BINANCE_API_SECRET,
-            "TRADING_SYMBOL": settings.TRADING_SYMBOL,
-            "TRADE_AMOUNT": settings.TRADE_AMOUNT,
-            "TRADE_CURRENCY": settings.TRADE_CURRENCY,
-            "STOP_LOSS": settings.STOP_LOSS,
-            "STOP_LOSS_TYPE": settings.STOP_LOSS_TYPE,
-            "TIMEFRAME": settings.TIMEFRAME,
-            "TIMEFRAME_UNIT": settings.TIMEFRAME_UNIT,
-        }
-
-        form_snapshot = {
-            "mode": self._mode_dropdown.value,
-            "trading_type": self._trading_type_dropdown.value,
-            "leverage": self._leverage_dropdown.value,
-            "order_type": self._order_type_dropdown.value,
-            "limit_price": self._limit_price_field.value,
-            "api_key": self._api_key_field.value,
-            "api_secret": self._api_secret_field.value,
-            "symbol": self._symbol_picker.get_selected_symbol(),
-            "amount": self._amount_field.value,
-            "currency": self._currency_dropdown.value,
-            "sl": self._sl_field.value,
-            "sl_type": self._sl_type_dropdown.value,
-            "timeframe": self._timeframe_field.value,
-            "tf_unit": self._timeframe_unit_dropdown.value,
-        }
+        form = self._build_form_data()
+        env_snapshot = self._build_env_snapshot()
+        form_snapshot = vars(form)
 
         try:
-            symbol = self._symbol_picker.get_selected_symbol()
-            mode = self._mode_dropdown.value or "PAPER"
-            trading_type = self._trading_type_dropdown.value or "SPOT"
-            leverage = int(self._leverage_dropdown.value or "1")
-            order_type = self._order_type_dropdown.value or "MARKET"
-            limit_price = float(self._limit_price_field.value or "0")
-            api_key = self._api_key_field.value or ""
-            api_secret = self._api_secret_field.value or ""
-            
-            # Nuevos campos
-            amount = float(self._amount_field.value or "10.0")
-            currency = self._currency_dropdown.value or "USDT"
-            sl = float(self._sl_field.value or "1.01")
-            sl_type = self._sl_type_dropdown.value or "PERCENT"
-            timeframe = int(self._timeframe_field.value or "1")
-            tf_unit = self._timeframe_unit_dropdown.value or "MINUTES"
+            EnvService.save_sensitive(form.api_key, form.api_secret)
 
-            # 1. Guardar solo variables sensibles en .env
-            self._write_env_sensitive(api_key, api_secret)
-
-            # 2. Guardar configuración de trading en DB (async)
             import asyncio
-            asyncio.create_task(self._save_config_to_db(
-                symbol=symbol,
-                mode=mode,
-                trading_type=trading_type,
-                leverage=leverage,
-                order_type=order_type,
-                limit_price=limit_price,
-                amount=amount,
-                currency=currency,
-                sl=sl,
-                sl_type=sl_type,
-                timeframe=timeframe,
-                tf_unit=tf_unit,
-            ))
+            asyncio.create_task(self._save_config_to_db(form))
 
-            # 3. Actualizar settings en memoria
-            settings.reload_from_env()  # Solo sensibles
-            settings.TRADING_SYMBOL = symbol
-            settings.TRADING_MODE = mode
-            settings.TRADING_TYPE = trading_type
-            settings.LEVERAGE = leverage
-            settings.ORDER_TYPE = order_type
-            settings.LIMIT_PRICE = limit_price
-            settings.TRADE_AMOUNT = amount
-            settings.TRADE_CURRENCY = currency
-            settings.STOP_LOSS = sl
-            settings.STOP_LOSS_TYPE = sl_type
-            settings.TIMEFRAME = timeframe
-            settings.TIMEFRAME_UNIT = tf_unit
+            self._update_settings_from_form(form)
 
-            # 4. Publicar evento para que los servicios reaccionen
             event_bus.publish(SettingsUpdatedEvent(
-                symbol=symbol,
-                mode=mode,
-                trading_type=trading_type,
-                leverage=leverage,
-                order_type=order_type,
-                limit_price=limit_price,
-                trade_amount=amount,
-                trade_currency=currency,
-                stop_loss=sl,
-                stop_loss_type=sl_type,
-                timeframe=timeframe,
-                timeframe_unit=tf_unit,
-                api_key=api_key,
-                api_secret=api_secret,
+                symbol=form.symbol,
+                mode=form.mode,
+                trading_type=form.trading_type,
+                leverage=form.leverage,
+                order_type=form.order_type,
+                limit_price=form.limit_price,
+                trade_amount=form.amount,
+                trade_currency=form.currency,
+                stop_loss=form.sl,
+                stop_loss_type=form.sl_type,
+                timeframe=form.timeframe,
+                timeframe_unit=form.tf_unit,
+                api_key=form.api_key,
+                api_secret=form.api_secret,
             ))
 
             self._feedback_text.value = "✅ Configuración guardada. Reconectando..."
             self._feedback_text.color = ft.Colors.GREEN_400
 
         except Exception as exc:
-            # Rollback: restaurar .env y memoria
-            self._rollback_env(snapshot)
+            EnvService.rollback(env_snapshot)
             settings.reload_from_env()
-
-            # Restaurar campos del formulario
             self._restore_form_fields(form_snapshot)
-
-            # Mostrar error
             self._feedback_text.value = f"❌ Error: {exc}. Cambios revertidos."
             self._feedback_text.color = ft.Colors.RED_400
 
@@ -677,56 +654,48 @@ class SettingsView(ft.Column):
             self._close_dialog()
             self._feedback_text.update()
 
-    async def _save_config_to_db(self, symbol: str, mode: str, trading_type: str,
-                                  leverage: int, order_type: str, limit_price: float,
-                                  amount: float, currency: str, sl: float, sl_type: str,
-                                  timeframe: int, tf_unit: str) -> None:
+    async def _save_config_to_db(self, form: SettingsFormData) -> None:
         """Guarda la configuración de trading en la base de datos."""
         from services.config_service import config_service
         await config_service.update(
-            trading_symbol=symbol,
-            trading_mode=mode,
-            trading_type=trading_type,
-            leverage=leverage,
-            order_type=order_type,
-            limit_price=limit_price,
-            trade_amount=amount,
-            trade_currency=currency,
-            stop_loss=sl,
-            stop_loss_type=sl_type,
-            timeframe=timeframe,
-            timeframe_unit=tf_unit,
+            trading_symbol=form.symbol,
+            trading_mode=form.mode,
+            trading_type=form.trading_type,
+            leverage=form.leverage,
+            order_type=form.order_type,
+            limit_price=form.limit_price,
+            trade_amount=form.amount,
+            trade_currency=form.currency,
+            stop_loss=form.sl,
+            stop_loss_type=form.sl_type,
+            timeframe=form.timeframe,
+            timeframe_unit=form.tf_unit,
         )
 
     def _restore_form_fields(self, form_snapshot: dict) -> None:
         """Restaura los campos del formulario a valores anteriores."""
         self._mode_dropdown.value = form_snapshot["mode"]
         self._trading_type_dropdown.value = form_snapshot["trading_type"]
-        self._leverage_dropdown.value = form_snapshot["leverage"]
+        self._leverage_dropdown.value = str(form_snapshot["leverage"])
         self._order_type_dropdown.value = form_snapshot["order_type"]
-        self._limit_price_field.value = form_snapshot["limit_price"]
+        self._limit_price_field.value = str(form_snapshot["limit_price"])
         self._api_key_field.value = form_snapshot["api_key"]
         self._api_secret_field.value = form_snapshot["api_secret"]
-        
-        # Restaurar nuevos campos
-        self._amount_field.value = form_snapshot["amount"]
+        self._amount_field.value = str(form_snapshot["amount"])
         self._currency_dropdown.value = form_snapshot["currency"]
-        self._sl_field.value = form_snapshot["sl"]
+        self._sl_field.value = str(form_snapshot["sl"])
         self._sl_type_dropdown.value = form_snapshot["sl_type"]
-        self._timeframe_field.value = form_snapshot["timeframe"]
+        self._timeframe_field.value = str(form_snapshot["timeframe"])
         self._timeframe_unit_dropdown.value = form_snapshot["tf_unit"]
 
-        # Actualizar visibilidad según modo
         is_live = form_snapshot["mode"] == "LIVE"
         self._api_key_field.visible = is_live
         self._api_secret_field.visible = is_live
         self._live_warning.visible = is_live
 
-        # Actualizar visibilidad según tipo de trading
         show_leverage = form_snapshot["trading_type"] in ("FUTURES", "MARGIN")
         self._leverage_dropdown.visible = show_leverage
 
-        # Actualizar visibilidad según tipo de orden
         is_limit = form_snapshot["order_type"] == "LIMIT"
         self._limit_price_field.visible = is_limit
 
@@ -742,73 +711,3 @@ class SettingsView(ft.Column):
             self._confirm_dialog.update()
             if self._confirm_dialog in self.page.overlay:
                 self.page.overlay.remove(self._confirm_dialog)
-
-    @staticmethod
-    def _write_env(mode: str, trading_type: str, leverage: int,
-                   order_type: str, limit_price: float,
-                   api_key: str, api_secret: str) -> None:
-        """Escribe/actualiza el archivo .env con la nueva configuración."""
-        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-        lines = []
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-
-        def set_var(lines: list[str], key: str, val: str) -> list[str]:
-            for i, line in enumerate(lines):
-                if line.startswith(f"{key}="):
-                    lines[i] = f"{key}={val}"
-                    return lines
-            lines.append(f"{key}={val}")
-            return lines
-
-        lines = set_var(lines, "TRADING_MODE", mode)
-        lines = set_var(lines, "TRADING_TYPE", trading_type)
-        lines = set_var(lines, "LEVERAGE", str(leverage))
-        lines = set_var(lines, "ORDER_TYPE", order_type)
-        lines = set_var(lines, "LIMIT_PRICE", str(limit_price))
-        lines = set_var(lines, "BINANCE_API_KEY", api_key)
-        lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
-
-        env_path.write_text("\n".join(lines), encoding="utf-8")
-
-    @staticmethod
-    def _write_env_sensitive(api_key: str, api_secret: str) -> None:
-        """Escribe SOLO variables sensibles en .env."""
-        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-        lines = []
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-
-        def set_var(lines: list[str], key: str, val: str) -> list[str]:
-            for i, line in enumerate(lines):
-                if line.startswith(f"{key}="):
-                    lines[i] = f"{key}={val}"
-                    return lines
-            lines.append(f"{key}={val}")
-            return lines
-
-        lines = set_var(lines, "BINANCE_API_KEY", api_key)
-        lines = set_var(lines, "BINANCE_API_SECRET", api_secret)
-
-        env_path.write_text("\n".join(lines), encoding="utf-8")
-
-    @staticmethod
-    def _rollback_env(snapshot: dict) -> None:
-        """Restaura el .env a los valores del snapshot."""
-        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-        lines = []
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-
-        def set_var(lines: list[str], key: str, val: str) -> list[str]:
-            for i, line in enumerate(lines):
-                if line.startswith(f"{key}="):
-                    lines[i] = f"{key}={val}"
-                    return lines
-            lines.append(f"{key}={val}")
-            return lines
-
-        for key, value in snapshot.items():
-            lines = set_var(lines, key, str(value))
-
-        env_path.write_text("\n".join(lines), encoding="utf-8")

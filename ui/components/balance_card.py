@@ -124,10 +124,17 @@ class BalanceCard(ft.Container):
     def did_mount(self) -> None:
         event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        self._sync_from_settings()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+
+    def _sync_from_settings(self) -> None:
+        """Re-sincroniza badge y labels desde settings (did_mount + handler)."""
+        self._update_badge(settings.TRADING_TYPE)
+        self._update_values_for_type(settings.TRADING_TYPE)
+        self.update()
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         """Actualiza valores con datos reales del balance."""
@@ -139,8 +146,7 @@ class BalanceCard(ft.Container):
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Actualiza badge, labels y muestra indicador de carga."""
-        self._update_badge(event.trading_type)
-        self._update_values_for_type(event.trading_type)
+        self._sync_from_settings()
         self._loading.visible = True
         self._time_text.value = f"Cargando saldo de {event.trading_type}..."
         self.update()

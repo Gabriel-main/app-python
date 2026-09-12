@@ -3,11 +3,11 @@ MiniChart — Gráfico sparkline de los últimos N ticks de precio.
 
 Dibuja una línea de precio usando ft.Canvas con puntos conectados.
 Se actualiza en cada PriceTickEvent añadiendo el nuevo precio al buffer.
-
-Regla: Solo redibuja el canvas (chart_canvas.update()), no la vista completa.
+Limpia el buffer y actualiza símbolo cuando cambian los settings.
 """
 from __future__ import annotations
 
+import logging
 from collections import deque
 
 import flet as ft
@@ -15,7 +15,9 @@ import flet.canvas as cv
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import PriceTickEvent
+from core.events import BalanceUpdateEvent, PriceTickEvent, SettingsUpdatedEvent
+
+log = logging.getLogger(__name__)
 
 
 class MiniChart(ft.Container):
@@ -35,9 +37,11 @@ class MiniChart(ft.Container):
             height=self.HEIGHT,
         )
 
+        self._chart_label = ft.Text("Precio 1m", size=10, color=ft.Colors.BLUE_GREY_400)
+
         self.content = ft.Column(
             controls=[
-                ft.Text("Precio 1m", size=10, color=ft.Colors.BLUE_GREY_400),
+                self._chart_label,
                 self._canvas,
             ],
             spacing=4,
@@ -52,18 +56,50 @@ class MiniChart(ft.Container):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
+        self._sync_symbol()
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
+
+    def _sync_symbol(self) -> None:
+        """Re-sincroniza símbolo desde settings (did_mount + handler)."""
+        if settings.TRADING_SYMBOL != self.symbol:
+            self.symbol = settings.TRADING_SYMBOL
+            self._prices.clear()
+            self._redraw()
 
     # ------------------------------------------------------------------
-    # Handler
+    # Handlers
     # ------------------------------------------------------------------
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
+        log.debug("MiniChart: tick received - event.symbol=%s, self.symbol=%s, buffer=%d",
+                  event.symbol, self.symbol, len(self._prices))
         if event.symbol != self.symbol:
             return
         self._prices.append(event.price)
+        log.debug("MiniChart: added price %.2f, buffer now %d", event.price, len(self._prices))
         self._redraw()
+
+    async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
+        """Limpia buffer y actualiza símbolo cuando cambian los settings."""
+        log.info("MiniChart: settings updated - event.symbol=%s, self.symbol=%s",
+                 event.symbol, self.symbol)
+        self._sync_symbol()
+
+    async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
+        """Actualiza label según tipo de trading."""
+        type_labels = {
+            "SPOT": "Precio Spot",
+            "FUTURES": "Precio Futures",
+            "MARGIN": "Precio Margin",
+        }
+        label = type_labels.get(event.trading_type, "Precio 1m")
+        self._chart_label.value = label
+        self._chart_label.update()
 
     # ------------------------------------------------------------------
     # Dibujo del sparkline
