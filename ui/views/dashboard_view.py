@@ -185,8 +185,8 @@ class DashboardView(ft.Column):
     def _sync_from_settings(self) -> None:
         """Re-sincroniza estado desde settings (llamar en did_mount)."""
         self._sync_badges()
-        self._ticker.symbol = settings.TRADING_SYMBOL
-        self._chart.symbol = settings.TRADING_SYMBOL
+        self._ticker._sync_symbol()
+        self._chart._sync_symbol()
 
     def _sync_badges(self) -> None:
         """Sincroniza badges con los valores actuales de settings."""
