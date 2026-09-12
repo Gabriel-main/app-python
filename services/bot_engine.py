@@ -535,22 +535,11 @@ class BotEngine:
 
     async def _execute_live_initial(self, op: TradingOperation) -> None:
         """Ejecuta una orden real inicial en Binance."""
+        from services.binance_client import create_client, execute_order
+
         try:
             if not self._client:
-                from binance import AsyncClient  # type: ignore
-                if settings.TRADING_TYPE == "FUTURES":
-                    self._client = await AsyncClient.create(
-                        api_key=settings.BINANCE_API_KEY,
-                        api_secret=settings.BINANCE_API_SECRET,
-                        testnet=settings.BINANCE_TESTNET,
-                        futures=True,
-                    )
-                else:
-                    self._client = await AsyncClient.create(
-                        api_key=settings.BINANCE_API_KEY,
-                        api_secret=settings.BINANCE_API_SECRET,
-                        testnet=settings.BINANCE_TESTNET,
-                    )
+                self._client = await create_client()
 
             if settings.TRADING_TYPE in ("FUTURES", "MARGIN") and not self._leverage_set:
                 await self._set_leverage()
@@ -562,12 +551,7 @@ class BotEngine:
                 "quantity": op.quantity,
             }
 
-            if settings.TRADING_TYPE == "FUTURES":
-                response = await self._client.futures_create_order(**order_params)
-            elif settings.TRADING_TYPE == "MARGIN":
-                response = await self._client.margin_create_order(**order_params)
-            else:
-                response = await self._client.create_order(**order_params)
+            response = await execute_order(self._client, **order_params)
 
             fill_price = float(response.get("fills", [{}])[0].get("price", op.entry_price))
 
@@ -593,22 +577,11 @@ class BotEngine:
         self, op: TradingOperation, trigger_price: float, order_id: str
     ) -> OrderExecutedEvent | None:
         """Ejecuta una orden de stop loss real en Binance."""
+        from services.binance_client import create_client, execute_order
+
         try:
             if not self._client:
-                from binance import AsyncClient  # type: ignore
-                if settings.TRADING_TYPE == "FUTURES":
-                    self._client = await AsyncClient.create(
-                        api_key=settings.BINANCE_API_KEY,
-                        api_secret=settings.BINANCE_API_SECRET,
-                        testnet=settings.BINANCE_TESTNET,
-                        futures=True,
-                    )
-                else:
-                    self._client = await AsyncClient.create(
-                        api_key=settings.BINANCE_API_KEY,
-                        api_secret=settings.BINANCE_API_SECRET,
-                        testnet=settings.BINANCE_TESTNET,
-                    )
+                self._client = await create_client()
 
             order_params = {
                 "symbol": settings.TRADING_SYMBOL,
@@ -617,12 +590,7 @@ class BotEngine:
                 "quantity": op.quantity,
             }
 
-            if settings.TRADING_TYPE == "FUTURES":
-                response = await self._client.futures_create_order(**order_params)
-            elif settings.TRADING_TYPE == "MARGIN":
-                response = await self._client.margin_create_order(**order_params)
-            else:
-                response = await self._client.create_order(**order_params)
+            response = await execute_order(self._client, **order_params)
 
             fill_price = float(response.get("fills", [{}])[0].get("price", trigger_price))
 

@@ -171,30 +171,12 @@ class BinanceService:
     # ------------------------------------------------------------------
 
     async def _run_live_stream(self) -> None:
-        from binance import AsyncClient, BinanceSocketManager  # type: ignore
+        from binance import BinanceSocketManager  # type: ignore
         from binance.exceptions import BinanceAPIException, BinanceRequestException  # type: ignore
+        from services.binance_client import create_client
 
         try:
-            # Crear cliente con endpoint correcto según TRADING_TYPE
-            if settings.TRADING_TYPE == "FUTURES":
-                self._client = await AsyncClient.create(
-                    api_key=settings.BINANCE_API_KEY,
-                    api_secret=settings.BINANCE_API_SECRET,
-                    testnet=settings.BINANCE_TESTNET,
-                    futures=True,
-                )
-            elif settings.TRADING_TYPE == "MARGIN":
-                self._client = await AsyncClient.create(
-                    api_key=settings.BINANCE_API_KEY,
-                    api_secret=settings.BINANCE_API_SECRET,
-                    testnet=settings.BINANCE_TESTNET,
-                )
-            else:  # SPOT
-                self._client = await AsyncClient.create(
-                    api_key=settings.BINANCE_API_KEY,
-                    api_secret=settings.BINANCE_API_SECRET,
-                    testnet=settings.BINANCE_TESTNET,
-                )
+            self._client = await create_client()
 
             bm = BinanceSocketManager(self._client)
             symbol_lower = settings.TRADING_SYMBOL.lower()
