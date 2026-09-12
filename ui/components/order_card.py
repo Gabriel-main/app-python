@@ -38,7 +38,7 @@ def OrderCard(order: dict) -> ft.Card:
         dt = "---"
 
     return ft.Card(
-        color=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+        bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
         elevation=0,
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=12, bottom=12),

@@ -24,7 +24,7 @@ class OrdersView(ft.Column):
         self._repository = order_repository
         self._load_task: asyncio.Task | None = None
 
-        self._list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
+        self._list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
         self._loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3)
         self._empty_label = ft.Text(
             "Sin órdenes aún.\nEl bot ejecutará órdenes cuando detecte señales.",

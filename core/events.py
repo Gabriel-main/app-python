@@ -170,4 +170,72 @@ class SettingsUpdatedEvent:
 @dataclass
 class NavigateToEvent:
     """Solicitud de navegación a un tab específico."""
-    index: int  # 0=Dashboard, 1=Órdenes, 2=Config
+    index: int  # 0=Dashboard, 1=Órdenes, 2=Config, 3=Auditoría
+
+
+# ---------------------------------------------------------------------------
+# Eventos de Dominio del Bot Engine (audit trail)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TradingLifecycleEvent:
+    """Cambio de ciclo de vida del bot (started/stopped)."""
+    action: str                         # "STARTED" | "STOPPED"
+    detail: str = ""
+    data: dict = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class OperationInsertedEvent:
+    """Nueva operación PENDING insertada por condición de SL."""
+    active_side: str = ""
+    active_sl: float = 0.0
+    pa: float = 0.0
+    new_pending_side: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class TimeframeCycleEvent:
+    """Ciclo de temporalidad completado."""
+    pa: float = 0.0
+    active_side: str = ""
+    new_pending_side: str = ""
+    operations_count: int = 0
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class StopLossEvent:
+    """Stop loss ejecutado."""
+    order_id: str = ""
+    side: str = ""
+    quantity: float = 0.0
+    price: float = 0.0
+    mode: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class InitialOrderEvent:
+    """Orden inicial ejecutada."""
+    order_id: str = ""
+    side: str = ""
+    quantity: float = 0.0
+    price: float = 0.0
+    timestamp: float = field(default_factory=time.time)
+
+
+# ---------------------------------------------------------------------------
+# Evento de Auditoría
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuditEvent:
+    """Evento de auditoría para trazabilidad del bot."""
+    timestamp: float = field(default_factory=time.time)
+    category: str = ""          # "CONNECTION", "PRICE", "SIGNAL", "ORDER", "OPERATION", "STATE", "CONFIG"
+    action: str = ""            # "CONNECTED", "TICK", "BUY_SIGNAL", "ORDER_EXECUTED", etc.
+    detail: str = ""            # Mensaje descriptivo
+    data: dict = field(default_factory=dict)  # Datos adicionales

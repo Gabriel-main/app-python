@@ -29,10 +29,12 @@ from database.db_queue import db_queue
 from services.binance_service import binance_service
 from services.bot_engine import bot_engine
 from services.config_service import config_service
+from services.audit_service import audit_service
 from repositories.order_repository import SQLOrderRepository
 from ui.views.dashboard_view import DashboardView
 from ui.views.orders_view import OrdersView
 from ui.views.settings_view import SettingsView
+from ui.views.audit_view import AuditView
 
 
 async def main(page: ft.Page) -> None:
@@ -62,8 +64,9 @@ async def main(page: ft.Page) -> None:
     dashboard = DashboardView()
     orders = OrdersView(order_repository=SQLOrderRepository())
     settings_view = SettingsView()
+    audit_view = AuditView()
 
-    views = [dashboard, orders, settings_view]
+    views = [dashboard, orders, settings_view, audit_view]
     current_view_index = 0
 
     # Contenedor de vistas (padding lateral aquí para que scrollbar esté al borde)
@@ -95,6 +98,11 @@ async def main(page: ft.Page) -> None:
                 icon=ft.Icons.SETTINGS_OUTLINED,
                 selected_icon=ft.Icons.SETTINGS,
                 label="Config",
+            ),
+            ft.NavigationBarDestination(
+                icon=ft.Icons.BUG_REPORT_OUTLINED,
+                selected_icon=ft.Icons.BUG_REPORT,
+                label="Auditoría",
             ),
         ],
         on_change=lambda e: _navigate(e.control.selected_index),
@@ -164,6 +172,7 @@ async def main(page: ft.Page) -> None:
     await settings.load_from_db()         # Cargar config desde DB
     await event_bus.start()
     await db_queue.start()
+    await audit_service.start()
     await bot_engine.start()
     await binance_service.start()
 
@@ -176,6 +185,7 @@ async def main(page: ft.Page) -> None:
     async def on_disconnect(e: ft.ControlEvent) -> None:
         await binance_service.stop()
         await bot_engine.stop()
+        await audit_service.stop()
         await db_queue.stop()
         await event_bus.stop()
 

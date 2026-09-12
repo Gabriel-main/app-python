@@ -26,12 +26,17 @@ from core.event_bus import event_bus
 from core.events import (
     BotSignalEvent,
     BotStateChangedEvent,
+    InitialOrderEvent,
+    OperationInsertedEvent,
     OperationState,
     OperationUpdateEvent,
     OrderExecutedEvent,
     PriceTickEvent,
     PositionUpdateEvent,
     SettingsUpdatedEvent,
+    StopLossEvent,
+    TimeframeCycleEvent,
+    TradingLifecycleEvent,
 )
 from config.settings import settings
 from database.db_queue import db_queue
@@ -290,6 +295,12 @@ class BotEngine:
             sell_op.entry_price, sell_op.stop_loss,
         )
 
+        event_bus.publish(TradingLifecycleEvent(
+            action="STARTED",
+            detail=f"Bot iniciado | Pa=${pa:,.4f} | SL dist=${sl_dist:,.4f}",
+            data={"pa": pa, "sl_dist": sl_dist, "operations": 2},
+        ))
+
         await self._execute_initial_orders()
         self._publish_update()
         self._start_timeframe_timer()
@@ -307,6 +318,11 @@ class BotEngine:
 
         self._publish_update()
         self._operations.clear()
+
+        event_bus.publish(TradingLifecycleEvent(
+            action="STOPPED",
+            detail="Bot detenido por el usuario",
+        ))
 
         log.info("Trading stopped")
 
@@ -383,6 +399,14 @@ class BotEngine:
                     new_op = self._create_operation(complement_side, "PENDING", pa, sl_dist, quantity)
                     self._operations.append(new_op)
                     pending_sides.add(complement_side)
+
+                    event_bus.publish(OperationInsertedEvent(
+                        active_side=op.side,
+                        active_sl=op.stop_loss,
+                        pa=pa,
+                        new_pending_side=complement_side,
+                    ))
+
                     log.info("Inserted PENDING %s due to SL condition", complement_side)
 
     # ------------------------------------------------------------------
@@ -468,6 +492,13 @@ class BotEngine:
 
         log.info("Timeframe update: ACTIVE=%s, NEW PENDING=%s",
                  active_op.order_id, new_pending.order_id)
+
+        event_bus.publish(TimeframeCycleEvent(
+            pa=pa,
+            active_side=active_op.side,
+            new_pending_side=new_pending.side,
+            operations_count=len(self._operations),
+        ))
 
         self._publish_update()
 
@@ -563,6 +594,15 @@ class BotEngine:
         event_bus.publish(order_event)
         db_queue.enqueue_order(order_event)
         op.state = "PAST"
+
+        event_bus.publish(StopLossEvent(
+            order_id=order_id,
+            side=op.side,
+            quantity=op.quantity,
+            price=trigger_price,
+            mode=settings.TRADING_MODE,
+        ))
+
         log.info("SL executed, operation marked PAST: %s", op.order_id)
 
     # ------------------------------------------------------------------
@@ -589,6 +629,13 @@ class BotEngine:
                          op.order_id, op.side, op.quantity, op.entry_price)
                 event_bus.publish(order_event)
                 db_queue.enqueue_order(order_event)
+
+                event_bus.publish(InitialOrderEvent(
+                    order_id=op.order_id,
+                    side=op.side,
+                    quantity=op.quantity,
+                    price=op.entry_price,
+                ))
             else:
                 await self._execute_live_initial(op)
 

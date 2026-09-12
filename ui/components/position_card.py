@@ -41,7 +41,7 @@ def PositionCard(position: dict) -> ft.Card:
     tt_info = TRADING_TYPE_COLORS.get(trading_type, (ft.Colors.BLUE_GREY_400, ft.Colors.BLUE_GREY_900, trading_type))
 
     return ft.Card(
-        color=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+        bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
         elevation=0,
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=12, bottom=12),
