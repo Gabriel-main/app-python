@@ -1,18 +1,19 @@
-R"""
-App Layout — Shell principal con NavigationBar.
+"""
+App Layout — Shell principal con NavigationBar y login.
 
 Monta la app Flet con:
-- Fondo oscuro con gradiente tipo cripto
-- NavigationBar inferior con 3 tabs: Dashboard / Órdenes / Configuración
-- Gestión del ciclo de vida de los servicios (start/stop)
-- Tema oscuro premium con paleta azul-índigo
 - Sistema de autenticación con login
+- AnimatedSwitcher para transiciones suaves entre vistas
+- NavigationBar inferior con 4 tabs
+- Tema oscuro premium con paleta azul-índigo
 
-Regla: Inicia todos los servicios en on_connect (no en __init__).
+Refactorizado para aplicar SOLID:
+- SRP: view_registry crea vistas, navigator maneja transiciones
+- OCP: agregar vista = 1 línea en ViewRegistry.register_all()
+- DIP: app_layout orquesta, no instancia widgets directamente
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -33,7 +34,8 @@ from services.bot_engine import bot_engine
 from services.config_service import config_service
 from services.audit_service import audit_service
 from services.paper_balance import paper_balance
-from repositories.order_repository import SQLOrderRepository
+from ui.view_registry import ViewRegistry
+from ui.navigator import Navigator
 
 
 async def main(page: ft.Page) -> None:
@@ -44,26 +46,25 @@ async def main(page: ft.Page) -> None:
     # ------------------------------------------------------------------
     page.title = settings.APP_TITLE
     page.theme_mode = ft.ThemeMode.DARK
-    page.bgcolor = "#0a0e1a"  # Azul oscuro profundo
+    page.bgcolor = "#0a0e1a"
     page.padding = 0
     page.window.width = 400
     page.window.height = 850
     page.window.min_width = 320
     page.window.min_height = 500
 
-    # Tema premium
     page.theme = ft.Theme(
         color_scheme_seed=ft.Colors.BLUE,
         font_family="Roboto",
     )
 
     # ------------------------------------------------------------------
-    # Configurar servicio de autenticación
+    # Configurar autenticación
     # ------------------------------------------------------------------
     auth_service.configure(settings.APP_USERNAME, settings.APP_PASSWORD)
 
     # ------------------------------------------------------------------
-    # Barra de navegación inferior
+    # Barra de navegación
     # ------------------------------------------------------------------
     nav_bar = ft.NavigationBar(
         selected_index=0,
@@ -91,12 +92,15 @@ async def main(page: ft.Page) -> None:
                 label="Auditoría",
             ),
         ],
-        on_change=lambda e: _navigate(e.control.selected_index),
+        on_change=lambda e: _on_nav_change(e.control.selected_index),
     )
 
     # ------------------------------------------------------------------
-    # Contenedor de vistas (placeholder temporal hasta cargar config)
+    # AnimatedSwitcher + ViewRegistry + Navigator
     # ------------------------------------------------------------------
+    from ui.views.login_view import LoginView
+    login_view = LoginView()
+
     loading_view = ft.Container(
         expand=True,
         alignment=ft.Alignment(0, 0),
@@ -110,49 +114,26 @@ async def main(page: ft.Page) -> None:
         ),
     )
 
-    view_container = ft.Container(
+    animated_switcher = ft.AnimatedSwitcher(
         content=loading_view,
+        duration=500,
+        transition=ft.AnimatedSwitcherTransition.FADE,
+        switch_in_curve=ft.AnimationCurve.EASE_IN_OUT,
+        switch_out_curve=ft.AnimationCurve.EASE_IN_OUT,
+        expand=True,
+    )
+
+    view_container = ft.Container(
+        content=animated_switcher,
         expand=True,
         padding=ft.Padding(left=22, right=22, top=18, bottom=8),
     )
 
-    views: list = []
-    settings_view_ref = None  # Referencia para navegación index=4
-    current_view_index = 0
-    is_authenticated = False
-
-    def _navigate(index: int) -> None:
-        nonlocal current_view_index
-        if not is_authenticated:
-            return
-        # index=4 es para SettingsView (accedido desde Config)
-        if index == 4:
-            if settings_view_ref:
-                view_container.content = settings_view_ref
-                view_container.update()
-                current_view_index = 4
-            return
-        if index == current_view_index:
-            return
-        current_view_index = index
-        if views:
-            view_container.content = views[index]
-            view_container.update()
-
-            if index == 2:
-                views[2].refresh_symbols()
-
-    async def _on_navigate_to(e: NavigateToEvent) -> None:
-        _navigate(e.index)
+    view_registry = ViewRegistry()
+    navigator = Navigator(animated_switcher)
 
     # ------------------------------------------------------------------
-    # Vista de Login
-    # ------------------------------------------------------------------
-    from ui.views.login_view import LoginView
-    login_view = LoginView()
-
-    # ------------------------------------------------------------------
-    # Layout principal con fondo gradiente
+    # Layout principal
     # ------------------------------------------------------------------
     background = ft.Container(
         expand=True,
@@ -163,10 +144,7 @@ async def main(page: ft.Page) -> None:
         ),
         content=ft.Column(
             controls=[
-                ft.Container(
-                    content=view_container,
-                    expand=True,
-                ),
+                ft.Container(content=view_container, expand=True),
                 nav_bar,
             ],
             spacing=0,
@@ -175,44 +153,34 @@ async def main(page: ft.Page) -> None:
     )
 
     # ------------------------------------------------------------------
-    # Manejo de estado de autenticación
+    # Handlers de navegación
+    # ------------------------------------------------------------------
+    def _on_nav_change(index: int) -> None:
+        if not auth_service.is_authenticated:
+            return
+        view = view_registry.get(index)
+        if view:
+            navigator.navigate_to(index, view)
+            if index == 2:
+                view.refresh_symbols()
+
+    async def _on_navigate_to(e: NavigateToEvent) -> None:
+        _on_nav_change(e.index)
+
+    # ------------------------------------------------------------------
+    # Manejo de autenticación
     # ------------------------------------------------------------------
     def _show_login() -> None:
-        nonlocal is_authenticated
-        is_authenticated = False
+        navigator.reset()
         nav_bar.visible = False
-        view_container.content = login_view
-        view_container.update()
+        navigator.navigate_to(-1, login_view)
         nav_bar.update()
 
     def _show_main_app() -> None:
-        nonlocal is_authenticated, settings_view_ref
-        is_authenticated = True
+        view_registry.register_all()
         nav_bar.visible = True
         nav_bar.selected_index = 0
-        current_view_index = 0
-
-        # Construir vistas DESPUÉS de autenticar
-        from ui.views.dashboard_view import DashboardView
-        from ui.views.orders_view import OrdersView
-        from ui.views.settings_view import SettingsView
-        from ui.views.config_view import ConfigView
-        from ui.views.audit_view import AuditView
-        from services.symbol_repository import BinanceSymbolRepository
-
-        dashboard = DashboardView()
-        orders = OrdersView(order_repository=SQLOrderRepository())
-        settings_view_ref = SettingsView(
-            symbol_repository=BinanceSymbolRepository(binance_service)
-        )
-        config_view = ConfigView()
-        audit_view = AuditView()
-
-        views.clear()
-        views.extend([dashboard, orders, config_view, audit_view])
-
-        view_container.content = dashboard
-        view_container.update()
+        navigator.navigate_to(0, view_registry.dashboard)
         nav_bar.update()
 
     async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
@@ -222,37 +190,32 @@ async def main(page: ft.Page) -> None:
             _show_login()
 
     # ------------------------------------------------------------------
-    # Mostrar login o app según estado
+    # Estado inicial (antes de agregar a page)
     # ------------------------------------------------------------------
     if auth_service.is_authenticated:
-        nav_bar.visible = True
+        nav_bar.visible = False
     else:
         nav_bar.visible = False
-        view_container.content = login_view
+        animated_switcher.content = login_view
 
-    page.add(
-        ft.SafeArea(
-            expand=True,
-            content=background,
-        )
-    )
+    page.add(ft.SafeArea(expand=True, content=background))
 
-    # After page is added, update if authenticated
     if auth_service.is_authenticated:
         _show_main_app()
 
     # ------------------------------------------------------------------
-    # Resize handler — propaga tamaño a vistas hijas
+    # Resize handler
     # ------------------------------------------------------------------
     def on_resize(e: ft.ControlEvent) -> None:
-        for view in views:
-            if hasattr(view, '_on_resize'):
+        for idx in range(4):
+            view = view_registry.get(idx)
+            if view and hasattr(view, '_on_resize'):
                 view._on_resize(page.window.width, page.window.height)
 
     page.on_resize = on_resize
 
     # ------------------------------------------------------------------
-    # Inicialización de servicios (en orden)
+    # Inicialización de servicios
     # ------------------------------------------------------------------
     await create_db_and_tables()
     await config_service.init_from_env()
