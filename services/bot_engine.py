@@ -201,17 +201,7 @@ class BotEngine:
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Recarga parámetros de estrategia."""
-        settings.TRADING_MODE = event.mode
-        settings.TRADING_TYPE = event.trading_type
-        settings.LEVERAGE = event.leverage
-        settings.ORDER_TYPE = event.order_type
-        settings.LIMIT_PRICE = event.limit_price
-        settings.TRADE_AMOUNT = event.trade_amount
-        settings.TRADE_CURRENCY = event.trade_currency
-        settings.STOP_LOSS = event.stop_loss
-        settings.STOP_LOSS_TYPE = event.stop_loss_type
-        settings.TIMEFRAME = event.timeframe
-        settings.TIMEFRAME_UNIT = event.timeframe_unit
+        settings.from_event(event)
         self._leverage_set = False
 
         log.info(

@@ -5,6 +5,7 @@ Refactorizado para aplicar:
 - DRY: Reutiliza StatCard para estructura base
 - OCP: Usa BalanceDisplayStrategy para formatos por trading type
 - SRP: Solo maneja lógica de balance y formato
+- LSP: No manipula DOM interno de StatCard (usa header_extras)
 """
 from __future__ import annotations
 
@@ -32,10 +33,16 @@ class BalanceCard(StatCard):
         self._last_update: float = 0.0
         self._strategy: BalanceDisplayStrategy = get_strategy(settings.TRADING_TYPE)
 
-        # Badge de tipo (elemento específico de BalanceCard)
+        # Badge de tipo
         type_info = TRADING_TYPE_COLORS.get(settings.TRADING_TYPE, TRADING_TYPE_COLORS["SPOT"])
         self._type_badge = Badge(
             label=type_info[2], fg_color=type_info[0], bg_color=type_info[1]
+        )
+
+        # Loading indicator
+        self._loading = ft.ProgressRing(
+            width=14, height=14, stroke_width=2,
+            color=ft.Colors.CYAN_400, visible=False,
         )
 
         # Textos de saldo
@@ -52,13 +59,7 @@ class BalanceCard(StatCard):
         # Timestamp
         self._time_text = ft.Text("Sin datos", size=9, color=ft.Colors.BLUE_GREY_500)
 
-        # Loading indicator
-        self._loading = ft.ProgressRing(
-            width=14, height=14, stroke_width=2,
-            color=ft.Colors.CYAN_400, visible=False,
-        )
-
-        # Inicializar StatCard con estructura base
+        # Inicializar StatCard con header_extras (OCP: extensión segura)
         super().__init__(
             title="💰 Fondos",
             rows=[
@@ -71,22 +72,14 @@ class BalanceCard(StatCard):
                 (SettingsUpdatedEvent, self._on_settings_updated),
             ],
             show_dividers=False,
+            header_extras=[
+                self._type_badge,
+                ft.Container(width=4),
+                self._loading,
+            ],
         )
 
-        # Agregar elementos específicos de BalanceCard al header
-        self._inject_header_extras()
-
-    def _inject_header_extras(self) -> None:
-        """Inyecta badge y loading indicator en el header existente."""
-        if isinstance(self.content, ft.Column) and len(self.content.controls) > 0:
-            header_row = self.content.controls[0]
-            if isinstance(header_row, ft.Row):
-                # Insertar antes del Container(expand=True)
-                header_row.controls.insert(-1, self._type_badge)
-                header_row.controls.insert(-1, ft.Container(width=4))
-                header_row.controls.insert(-1, self._loading)
-
-        # Agregar timestamp al final
+        # Agregar timestamp al final del contenido
         if isinstance(self.content, ft.Column):
             self.content.controls.append(self._time_text)
 
@@ -120,6 +113,9 @@ class BalanceCard(StatCard):
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         """Actualiza valores con datos reales del balance."""
+        if event.trading_type != settings.TRADING_TYPE:
+            self._sync_from_settings()
+
         self._last_update = event.timestamp
         self._loading.visible = False
 

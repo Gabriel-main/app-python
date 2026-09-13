@@ -1,8 +1,9 @@
 """
 MiniChart — Gráfico sparkline de los últimos N ticks de precio.
 
-Refactorizado para aplicar SRP:
-- Usa EventBusSubscriber mixin para lifecycle
+Refactorizado para aplicar:
+- DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
+- SRP: Solo maneja visualización del gráfico
 """
 from __future__ import annotations
 
@@ -14,12 +15,12 @@ import flet.canvas as cv
 
 from config.settings import settings
 from core.events import BalanceUpdateEvent, PriceTickEvent, SettingsUpdatedEvent
-from ui.components.base import EventBusSubscriber
+from ui.components.base import SymbolAwareSubscriber
 
 log = logging.getLogger(__name__)
 
 
-class MiniChart(ft.Container, EventBusSubscriber):
+class MiniChart(ft.Container, SymbolAwareSubscriber):
     """Sparkline de precio de los últimos PRICE_BUFFER_SIZE ticks."""
 
     HEIGHT = 90
@@ -27,7 +28,7 @@ class MiniChart(ft.Container, EventBusSubscriber):
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         super().__init__()
-        self.symbol = symbol
+        self._current_symbol = symbol
         self._prices: deque[float] = deque(maxlen=settings.PRICE_BUFFER_SIZE)
 
         self._canvas = cv.Canvas(
@@ -61,28 +62,26 @@ class MiniChart(ft.Container, EventBusSubscriber):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         self._setup_subscriptions()
-        self._sync_symbol()
+        self.sync_symbol()
 
     def will_unmount(self) -> None:
         self._teardown_subscriptions()
 
-    def _sync_symbol(self) -> None:
-        if settings.TRADING_SYMBOL != self.symbol:
-            self.symbol = settings.TRADING_SYMBOL
-            self._prices.clear()
-            self._redraw()
+    def _on_symbol_changed(self, symbol: str) -> None:
+        self._prices.clear()
+        self._redraw()
 
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
-        if event.symbol != self.symbol:
+        if not self.matches_symbol(event.symbol):
             return
         self._prices.append(event.price)
         self._redraw()
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
-        self._sync_symbol()
+        self.sync_symbol()
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         type_labels = {

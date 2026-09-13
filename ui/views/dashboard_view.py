@@ -113,8 +113,8 @@ class DashboardView(ft.Column):
     def _sync_from_settings(self) -> None:
         """Re-sincroniza estado desde settings (llamar en did_mount)."""
         self._mode_badge.update_mode(settings.TRADING_MODE)
-        self._ticker._sync_symbol()
-        self._chart._sync_symbol()
+        self._ticker.sync_symbol()
+        self._chart.sync_symbol()
         self._stats.update_symbol(settings.TRADING_SYMBOL)
 
     # ------------------------------------------------------------------
@@ -122,8 +122,8 @@ class DashboardView(ft.Column):
     # ------------------------------------------------------------------
     def _on_resize(self, width: float, height: float) -> None:
         """Ajusta tamaños de fuente según ancho de pantalla."""
-        self._stats._on_resize(width, height)
-        self._ticker._on_resize(width, height)
+        self._stats.on_resize(width, height)
+        self._ticker.on_resize(width, height)
 
     # ------------------------------------------------------------------
     # Handlers

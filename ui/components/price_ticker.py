@@ -1,27 +1,27 @@
 """
 PriceTicker — Widget reactivo de precio en tiempo real.
 
-Refactorizado para aplicar SRP:
-- Usa EventBusSubscriber mixin para lifecycle
+Refactorizado para aplicar:
+- DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
+- SRP: Solo maneja visualización de precio
 """
 from __future__ import annotations
 
 import logging
 
 import flet as ft
-from config.settings import settings
 from core.events import PriceTickEvent, SettingsUpdatedEvent
-from ui.components.base import EventBusSubscriber
+from ui.components.base import SymbolAwareSubscriber
 
 log = logging.getLogger(__name__)
 
 
-class PriceTicker(ft.Column, EventBusSubscriber):
+class PriceTicker(ft.Column, SymbolAwareSubscriber):
     """Widget de precio en tiempo real con flash animado."""
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         super().__init__()
-        self.symbol = symbol
+        self._current_symbol = symbol
         self._last_price: float = 0.0
 
         self._symbol_label = ft.Text(
@@ -65,26 +65,24 @@ class PriceTicker(ft.Column, EventBusSubscriber):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         self._setup_subscriptions()
-        self._sync_symbol()
+        self.sync_symbol()
 
     def will_unmount(self) -> None:
         self._teardown_subscriptions()
 
-    def _sync_symbol(self) -> None:
-        if settings.TRADING_SYMBOL != self.symbol:
-            self.symbol = settings.TRADING_SYMBOL
-            self._symbol_label.value = self.symbol
-            self._last_price = 0.0
-            self._price_text.value = "---"
-            try:
-                self.update()
-            except RuntimeError:
-                pass
+    def _on_symbol_changed(self, symbol: str) -> None:
+        self._symbol_label.value = symbol
+        self._last_price = 0.0
+        self._price_text.value = "---"
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------
     # Responsive
     # ------------------------------------------------------------------
-    def _on_resize(self, width: float, height: float) -> None:
+    def on_resize(self, width: float, height: float) -> None:
         is_small = width < 360
         price_size = 28 if is_small else 36
         self._price_text.style = ft.TextStyle(
@@ -101,7 +99,7 @@ class PriceTicker(ft.Column, EventBusSubscriber):
     # Handlers
     # ------------------------------------------------------------------
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
-        if event.symbol != self.symbol:
+        if not self.matches_symbol(event.symbol):
             return
 
         is_up = event.price >= self._last_price
@@ -124,4 +122,4 @@ class PriceTicker(ft.Column, EventBusSubscriber):
             pass
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
-        self._sync_symbol()
+        self.sync_symbol()

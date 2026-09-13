@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from typing import Union
 
+from config.settings import settings
 from database.connection import get_session
 from database.models import Operation, Order, Position, PriceTick
 from core.event_bus import event_bus
@@ -236,9 +237,9 @@ class DBQueueWorker:
                             entry_price=op.entry_price,
                             stop_loss=op.stop_loss,
                             quantity=op.quantity,
-                            trading_type="SPOT",
-                            trade_currency="USDT",
-                            mode="PAPER",
+                            trading_type=settings.TRADING_TYPE,
+                            trade_currency=settings.TRADE_CURRENCY,
+                            mode=settings.TRADING_MODE,
                             created_at=op.timestamp,
                         )
                         session.add(new_op)

@@ -169,18 +169,20 @@ class SettingsView(ft.Column):
 
     def _update_settings_from_form(self, form: SettingsFormData) -> None:
         settings.reload_from_env()
-        settings.TRADING_SYMBOL = form.symbol
-        settings.TRADING_MODE = form.mode
-        settings.TRADING_TYPE = form.trading_type
-        settings.LEVERAGE = form.leverage
-        settings.ORDER_TYPE = form.order_type
-        settings.LIMIT_PRICE = form.limit_price
-        settings.TRADE_AMOUNT = form.amount
-        settings.TRADE_CURRENCY = form.currency
-        settings.STOP_LOSS = form.sl
-        settings.STOP_LOSS_TYPE = form.sl_type
-        settings.TIMEFRAME = form.timeframe
-        settings.TIMEFRAME_UNIT = form.tf_unit
+        settings.from_dict({
+            "trading_symbol": form.symbol,
+            "trading_mode": form.mode,
+            "trading_type": form.trading_type,
+            "leverage": form.leverage,
+            "order_type": form.order_type,
+            "limit_price": form.limit_price,
+            "trade_amount": form.amount,
+            "trade_currency": form.currency,
+            "stop_loss": form.sl,
+            "stop_loss_type": form.sl_type,
+            "timeframe": form.timeframe,
+            "timeframe_unit": form.tf_unit,
+        })
 
     # ------------------------------------------------------------------
     # Handlers
@@ -239,8 +241,6 @@ class SettingsView(ft.Column):
                 stop_loss_type=form.sl_type,
                 timeframe=form.timeframe,
                 timeframe_unit=form.tf_unit,
-                api_key=form.api_key,
-                api_secret=form.api_secret,
             ))
 
             self._feedback_text.value = "✅ Configuración guardada. Reconectando..."

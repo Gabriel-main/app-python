@@ -32,10 +32,6 @@ from services.config_service import config_service
 from services.audit_service import audit_service
 from services.paper_balance import paper_balance
 from repositories.order_repository import SQLOrderRepository
-from ui.views.dashboard_view import DashboardView
-from ui.views.orders_view import OrdersView
-from ui.views.settings_view import SettingsView
-from ui.views.audit_view import AuditView
 
 
 async def main(page: ft.Page) -> None:
@@ -57,24 +53,6 @@ async def main(page: ft.Page) -> None:
     page.theme = ft.Theme(
         color_scheme_seed=ft.Colors.BLUE,
         font_family="Roboto",
-    )
-
-    # ------------------------------------------------------------------
-    # Vistas
-    # ------------------------------------------------------------------
-    dashboard = DashboardView()
-    orders = OrdersView(order_repository=SQLOrderRepository())
-    settings_view = SettingsView()
-    audit_view = AuditView()
-
-    views = [dashboard, orders, settings_view, audit_view]
-    current_view_index = 0
-
-    # Contenedor de vistas (padding lateral aquí para que scrollbar esté al borde)
-    view_container = ft.Container(
-        content=dashboard,
-        expand=True,
-        padding=ft.Padding(left=22, right=22, top=18, bottom=8),
     )
 
     # ------------------------------------------------------------------
@@ -109,20 +87,44 @@ async def main(page: ft.Page) -> None:
         on_change=lambda e: _navigate(e.control.selected_index),
     )
 
+    # ------------------------------------------------------------------
+    # Contenedor de vistas (placeholder temporal hasta cargar config)
+    # ------------------------------------------------------------------
+    loading_view = ft.Container(
+        expand=True,
+        alignment=ft.Alignment(0, 0),
+        content=ft.Column(
+            controls=[
+                ft.ProgressRing(width=40, height=40, stroke_width=3, color=ft.Colors.CYAN_400),
+                ft.Text("Cargando configuración...", size=14, color=ft.Colors.BLUE_GREY_400),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=16,
+        ),
+    )
+
+    view_container = ft.Container(
+        content=loading_view,
+        expand=True,
+        padding=ft.Padding(left=22, right=22, top=18, bottom=8),
+    )
+
+    views: list = []
+    current_view_index = 0
+
     def _navigate(index: int) -> None:
         nonlocal current_view_index
         if index == current_view_index:
             return
         current_view_index = index
-        view_container.content = views[index]
-        view_container.update()
+        if views:
+            view_container.content = views[index]
+            view_container.update()
 
-        # Refresh symbols when navigating to Settings
-        if index == 2:  # Settings tab
-            settings_view.refresh_symbols()
+            if index == 2:
+                views[2].refresh_symbols()
 
     async def _on_navigate_to(e: NavigateToEvent) -> None:
-        """Handler para eventos de navegación desde otros componentes."""
         _navigate(e.index)
 
     # ------------------------------------------------------------------
@@ -169,8 +171,24 @@ async def main(page: ft.Page) -> None:
     # Inicialización de servicios (en orden)
     # ------------------------------------------------------------------
     await create_db_and_tables()
-    await config_service.init_from_env()  # Init DB con defaults de .env (primer inicio)
-    await settings.load_from_db()         # Cargar config desde DB
+    await config_service.init_from_env()
+    await settings.load_from_db()
+
+    # Construir vistas DESPUÉS de cargar config (OCP:BalanceCard lee TRADING_TYPE correcto)
+    from ui.views.dashboard_view import DashboardView
+    from ui.views.orders_view import OrdersView
+    from ui.views.settings_view import SettingsView
+    from ui.views.audit_view import AuditView
+
+    dashboard = DashboardView()
+    orders = OrdersView(order_repository=SQLOrderRepository())
+    settings_view = SettingsView()
+    audit_view = AuditView()
+
+    views = [dashboard, orders, settings_view, audit_view]
+    view_container.content = dashboard
+    view_container.update()
+
     await event_bus.start()
     await db_queue.start()
     await audit_service.start()
@@ -178,7 +196,6 @@ async def main(page: ft.Page) -> None:
     await bot_engine.start()
     await binance_service.start()
 
-    # Suscribir a eventos de navegación
     event_bus.subscribe(NavigateToEvent, _on_navigate_to)
 
     # ------------------------------------------------------------------

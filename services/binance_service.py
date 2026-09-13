@@ -41,12 +41,26 @@ log = logging.getLogger(__name__)
 class MockTickGenerator:
     """Simula un stream de ticks de precio para desarrollo/paper trading."""
 
+    _BASE_PRICES: dict[str, float] = {
+        "BTCUSDT": 65_000.0,
+        "ETHUSDT": 3_500.0,
+        "BNBUSDT": 600.0,
+        "SOLUSDT": 150.0,
+        "XRPUSDT": 0.60,
+        "ADAUSDT": 0.45,
+        "DOGEUSDT": 0.12,
+    }
+
     def __init__(self) -> None:
         self._base_price = 65_000.0
         self._tick_count = 0
 
+    def reset_for_symbol(self, symbol: str) -> None:
+        """Reset del precio base al cambiar de símbolo."""
+        self._base_price = self._BASE_PRICES.get(symbol, 100.0)
+        self._tick_count = 0
+
     def next_tick(self, symbol: str) -> PriceTickEvent:
-        # Simulación de movimiento de precio tipo random walk con sinusoide
         self._tick_count += 1
         noise = random.gauss(0, 50)
         wave = math.sin(self._tick_count * 0.1) * 200
@@ -232,7 +246,8 @@ class BinanceService:
             status="CONNECTED",
             message="Modo Simulación (Sin API Keys)"
         ))
-        interval = 1.5  # segundos entre ticks simulados
+        self._mock.reset_for_symbol(settings.TRADING_SYMBOL)
+        interval = 1.5
         while self._running:
             tick = self._mock.next_tick(settings.TRADING_SYMBOL)
             event_bus.publish(tick)

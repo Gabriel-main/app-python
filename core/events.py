@@ -164,8 +164,6 @@ class SettingsUpdatedEvent:
     stop_loss_type: str = "PERCENT"
     timeframe: int = 1
     timeframe_unit: str = "MINUTES"
-    api_key: str = ""
-    api_secret: str = ""
 
 
 @dataclass

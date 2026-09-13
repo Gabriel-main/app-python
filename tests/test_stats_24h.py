@@ -25,13 +25,13 @@ def test_stats_update_symbol():
 
 def test_stats_resize_small():
     stats = Stats24H()
-    stats._on_resize(320, 600)
+    stats.on_resize(320, 600)
     assert stats._high_text.style.size == 11
 
 
 def test_stats_resize_normal():
     stats = Stats24H()
-    stats._on_resize(400, 800)
+    stats.on_resize(400, 800)
     assert stats._high_text.style.size == 13
 
 
@@ -43,6 +43,9 @@ def test_stats_has_container_styling():
 
 def test_stats_row_has_3_columns():
     stats = Stats24H()
-    row = stats.content
-    assert isinstance(row, ft.Row)
-    assert len(row.controls) == 5  # 3 columns + 2 dividers
+    # StatCard.content es un Column que contiene Row(header), Container(spacer), Row(data)
+    column = stats.content
+    assert isinstance(column, ft.Column)
+    # La última fila contiene las 3 columnas de datos
+    data_row = column.controls[2]
+    assert isinstance(data_row, ft.Row)

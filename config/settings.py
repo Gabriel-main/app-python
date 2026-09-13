@@ -46,6 +46,49 @@ class Settings:
     BOT_MA_SLOW: int = 25
     BOT_QUANTITY: float = 0.001
 
+    # --- Mapping de campos de trading (DRY) ---
+    _TRADING_FIELDS: list[str] = [
+        "TRADING_SYMBOL", "TRADING_MODE", "TRADING_TYPE", "LEVERAGE",
+        "ORDER_TYPE", "LIMIT_PRICE", "TRADE_AMOUNT", "TRADE_CURRENCY",
+        "STOP_LOSS", "STOP_LOSS_TYPE", "TIMEFRAME", "TIMEFRAME_UNIT",
+        "BOT_MA_FAST", "BOT_MA_SLOW", "BOT_QUANTITY",
+    ]
+
+    # --- Mapping: Settings attr → SettingsUpdatedEvent field ---
+    _EVENT_FIELD_MAP: dict[str, str] = {
+        "TRADING_SYMBOL": "symbol",
+        "TRADING_MODE": "mode",
+        "TRADING_TYPE": "trading_type",
+        "LEVERAGE": "leverage",
+        "ORDER_TYPE": "order_type",
+        "LIMIT_PRICE": "limit_price",
+        "TRADE_AMOUNT": "trade_amount",
+        "TRADE_CURRENCY": "trade_currency",
+        "STOP_LOSS": "stop_loss",
+        "STOP_LOSS_TYPE": "stop_loss_type",
+        "TIMEFRAME": "timeframe",
+        "TIMEFRAME_UNIT": "timeframe_unit",
+    }
+
+    # --- Mapping: DB field → Settings attr ---
+    _DB_FIELD_MAP: dict[str, str] = {
+        "trading_symbol": "TRADING_SYMBOL",
+        "trading_mode": "TRADING_MODE",
+        "trading_type": "TRADING_TYPE",
+        "leverage": "LEVERAGE",
+        "order_type": "ORDER_TYPE",
+        "limit_price": "LIMIT_PRICE",
+        "trade_amount": "TRADE_AMOUNT",
+        "trade_currency": "TRADE_CURRENCY",
+        "stop_loss": "STOP_LOSS",
+        "stop_loss_type": "STOP_LOSS_TYPE",
+        "timeframe": "TIMEFRAME",
+        "timeframe_unit": "TIMEFRAME_UNIT",
+        "bot_ma_fast": "BOT_MA_FAST",
+        "bot_ma_slow": "BOT_MA_SLOW",
+        "bot_quantity": "BOT_QUANTITY",
+    }
+
     def has_api_keys(self) -> bool:
         """Devuelve True si las API Keys están configuradas."""
         return bool(self.BINANCE_API_KEY and self.BINANCE_API_SECRET)
@@ -57,47 +100,31 @@ class Settings:
         self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
         self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
 
+    def from_event(self, event) -> None:
+        """Actualiza campos de trading desde un SettingsUpdatedEvent (DRY)."""
+        for attr, event_field in self._EVENT_FIELD_MAP.items():
+            setattr(self, attr, getattr(event, event_field))
+
+    def from_dict(self, data: dict) -> None:
+        """Actualiza campos de trading desde un diccionario (DRY)."""
+        for db_field, attr in self._DB_FIELD_MAP.items():
+            if db_field in data:
+                setattr(self, attr, data[db_field])
+
+    def to_dict(self) -> dict:
+        """Serializa campos de trading a un diccionario (DRY)."""
+        return {attr.lower(): getattr(self, attr) for attr in self._TRADING_FIELDS}
+
     async def load_from_db(self) -> None:
         """Carga configuración de trading desde la base de datos."""
         from services.config_service import config_service
         config = await config_service.load()
-
-        self.TRADING_SYMBOL = config.trading_symbol
-        self.TRADING_MODE = config.trading_mode
-        self.TRADING_TYPE = config.trading_type
-        self.LEVERAGE = config.leverage
-        self.ORDER_TYPE = config.order_type
-        self.LIMIT_PRICE = config.limit_price
-        self.TRADE_AMOUNT = config.trade_amount
-        self.TRADE_CURRENCY = config.trade_currency
-        self.STOP_LOSS = config.stop_loss
-        self.STOP_LOSS_TYPE = config.stop_loss_type
-        self.TIMEFRAME = config.timeframe
-        self.TIMEFRAME_UNIT = config.timeframe_unit
-        self.BOT_MA_FAST = config.bot_ma_fast
-        self.BOT_MA_SLOW = config.bot_ma_slow
-        self.BOT_QUANTITY = config.bot_quantity
+        self.from_dict({field: getattr(config, field) for field in self._DB_FIELD_MAP})
 
     async def save_to_db(self) -> None:
         """Guarda la configuración actual de trading en la base de datos."""
         from services.config_service import config_service
-        await config_service.update(
-            trading_symbol=self.TRADING_SYMBOL,
-            trading_mode=self.TRADING_MODE,
-            trading_type=self.TRADING_TYPE,
-            leverage=self.LEVERAGE,
-            order_type=self.ORDER_TYPE,
-            limit_price=self.LIMIT_PRICE,
-            trade_amount=self.TRADE_AMOUNT,
-            trade_currency=self.TRADE_CURRENCY,
-            stop_loss=self.STOP_LOSS,
-            stop_loss_type=self.STOP_LOSS_TYPE,
-            timeframe=self.TIMEFRAME,
-            timeframe_unit=self.TIMEFRAME_UNIT,
-            bot_ma_fast=self.BOT_MA_FAST,
-            bot_ma_slow=self.BOT_MA_SLOW,
-            bot_quantity=self.BOT_QUANTITY,
-        )
+        await config_service.update(**self.to_dict())
 
 
 # Instancia global singleton

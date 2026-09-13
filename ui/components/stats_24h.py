@@ -2,7 +2,7 @@
 Stats24H — Estadísticas 24h usando StatCard (DRY).
 
 Refactorizado para aplicar:
-- DRY: Reutiliza StatCard en lugar de Container manual
+- DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
 - SRP: Solo maneja datos de stats 24h
 """
 from __future__ import annotations
@@ -11,8 +11,8 @@ import logging
 
 import flet as ft
 
-from core.event_bus import event_bus
-from core.events import PriceTickEvent
+from config.settings import settings
+from core.events import PriceTickEvent, SettingsUpdatedEvent
 from ui.components.stat_card import StatCard
 
 log = logging.getLogger(__name__)
@@ -41,16 +41,25 @@ class Stats24H(StatCard):
                 ("Mín 24h", self._low_text),
                 ("Volumen", self._vol_text),
             ],
-            event_subscriptions=[(PriceTickEvent, self._on_price_tick)],
+            event_subscriptions=[
+                (PriceTickEvent, self._on_price_tick),
+                (SettingsUpdatedEvent, self._on_settings_updated),
+            ],
         )
 
     def did_mount(self) -> None:
         self._setup_subscriptions()
+        self._sync_symbol()
 
     def will_unmount(self) -> None:
         self._teardown_subscriptions()
 
-    def _on_resize(self, width: float, height: float) -> None:
+    def _sync_symbol(self) -> None:
+        new_symbol = settings.TRADING_SYMBOL
+        if new_symbol != self._symbol:
+            self._symbol = new_symbol
+
+    def on_resize(self, width: float, height: float) -> None:
         is_small = width < 360
         size = 11 if is_small else 13
         self._high_text.style = ft.TextStyle(
@@ -85,6 +94,9 @@ class Stats24H(StatCard):
         except RuntimeError:
             pass
 
+    async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
+        self._sync_symbol()
+
     def update_symbol(self, symbol: str) -> None:
-        """Actualiza el símbolo filtrado."""
+        """Actualiza el símbolo filtrado (método público para DashboardView)."""
         self._symbol = symbol
