@@ -42,6 +42,7 @@ class SymbolListManager:
     def __init__(self, repository: object, initial_symbol: str) -> None:
         self._repository = repository
         self._trading_type = "SPOT"
+        self._currency = settings.TRADE_CURRENCY
         self._symbols: list[dict] = []
         self._selection = initial_symbol
         self._search_query = ""
@@ -83,19 +84,31 @@ class SymbolListManager:
         if trading_type == self._trading_type:
             return False
         self._trading_type = trading_type
+        self.invalidate()
+        return True
+
+    def set_currency(self, currency: str) -> bool:
+        """Cambia moneda. Retorna True si hubo cambio."""
+        if currency == self._currency:
+            return False
+        self._currency = currency
+        self.invalidate()
+        return True
+
+    def invalidate(self) -> None:
+        """Limpia estado y descarta eventos stale. Fuente única de invalidación."""
         self._symbols = []
         self._search_query = ""
         self._fetch_generation += 1
-        return True
 
     async def load_symbols(self) -> int:
         """Carga símbolos vía repository. Retorna generation para detectar stale events."""
         gen = self._fetch_generation
         if self._repository:
-            await self._repository.get_trading_symbols(self._trading_type)
+            await self._repository.get_trading_symbols(self._trading_type, self._currency)
         else:
             from services.binance_service import binance_service
-            await binance_service.get_trading_symbols(self._trading_type)
+            await binance_service.get_trading_symbols(self._trading_type, self._currency)
         return gen
 
     def accept_event(self, event_symbols: list[dict], event_trading_type: str) -> bool:
@@ -375,10 +388,18 @@ class SymbolPicker(ft.Container):
     def set_trading_type(self, trading_type: str) -> None:
         """Cambia el mercado y recarga los símbolos disponibles."""
         if self._mgr.set_trading_type(trading_type):
-            self._set_loading(True)
-            self._close_overlay()
-            asyncio.create_task(self._load_symbols())
+            self._trigger_reload()
+
+    def set_currency(self, currency: str) -> None:
+        """Cambia la moneda y recarga los símbolos disponibles."""
+        if self._mgr.set_currency(currency):
+            self._trigger_reload()
+
+    def _trigger_reload(self) -> None:
+        """Muestra loading, cierra overlay, dispara reload async. Fuente única."""
+        self._set_loading(True)
+        self._close_overlay()
+        asyncio.create_task(self._load_symbols())
 
     def refresh_symbols(self) -> None:
-        self._set_loading(True)
-        asyncio.create_task(self._load_symbols())
+        self._trigger_reload()

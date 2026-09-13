@@ -456,10 +456,12 @@ class OperationParamsSection(ft.Container):
         symbol_repository=None,
         on_change=None,
         on_symbol_changed_for_validation=None,
+        on_currency_changed_for_reload=None,
     ) -> None:
         super().__init__()
         self._on_change = on_change
         self._on_symbol_changed_for_validation = on_symbol_changed_for_validation
+        self._on_currency_changed_for_reload = on_currency_changed_for_reload
 
         self._amount_field = _textfield(
             label="Monto",
@@ -481,7 +483,7 @@ class OperationParamsSection(ft.Container):
             ],
             focused_color=ft.Colors.CYAN_400,
             width=120,
-            on_select=self._notify_change,
+            on_select=self._on_currency_changed,
         )
 
         self._symbol_picker = SymbolPicker(
@@ -555,6 +557,11 @@ class OperationParamsSection(ft.Container):
         if self._on_symbol_changed_for_validation:
             self._on_symbol_changed_for_validation(symbol)
 
+    def _on_currency_changed(self, e: ft.ControlEvent) -> None:
+        self._notify_change()
+        if self._on_currency_changed_for_reload:
+            self._on_currency_changed_for_reload(e.control.value)
+
     def _notify_change(self, *args) -> None:
         if self._on_change:
             self._on_change()
@@ -586,6 +593,10 @@ class OperationParamsSection(ft.Container):
     def update_trading_type(self, trading_type: str) -> None:
         """Notifica al SymbolPicker que el mercado cambió."""
         self._symbol_picker.set_trading_type(trading_type)
+
+    def update_currency(self, currency: str) -> None:
+        """Notifica al SymbolPicker que la moneda cambió."""
+        self._symbol_picker.set_currency(currency)
 
     def restore(self, form_snapshot: dict) -> None:
         self._amount_field.value = str(form_snapshot["amount"])

@@ -48,6 +48,7 @@ class SettingsView(ft.Column):
             symbol_repository=symbol_repository,
             on_change=self._update_save_button_state,
             on_symbol_changed_for_validation=self._on_symbol_changed_for_validation,
+            on_currency_changed_for_reload=self._on_currency_changed_for_reload,
         )
 
         # --- Indicador de validación ---
@@ -166,6 +167,11 @@ class SettingsView(ft.Column):
     def _on_trading_type_changed_for_validation(self, trading_type: str) -> None:
         self._params_section.update_trading_type(trading_type)
         asyncio.create_task(self._validate_current_symbol())
+
+    def _on_currency_changed_for_reload(self, currency: str) -> None:
+        if self._symbol_repository:
+            self._symbol_repository.clear_cache()
+        self._params_section.update_currency(currency)
 
     async def _validate_current_symbol(self) -> None:
         symbol = self._params_section.get_symbol()

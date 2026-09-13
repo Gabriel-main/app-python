@@ -344,10 +344,10 @@ class BinanceService:
         self._symbols_cache = {}
         self._symbols_cache_time = {}
 
-    async def get_trading_symbols(self, trading_type: str = "SPOT") -> list[dict]:
+    async def get_trading_symbols(self, trading_type: str = "SPOT", currency: str | None = None) -> list[dict]:
         """Obtiene símbolos disponibles (USDT/USDC) con precios actuales.
         Cache de 60 segundos por mercado para evitar rate limits."""
-        currency = settings.TRADE_CURRENCY
+        currency = currency or settings.TRADE_CURRENCY
         cache_key = f"{trading_type}_{currency}"
         now = time.time()
         if cache_key in self._symbols_cache and (now - self._symbols_cache_time.get(cache_key, 0)) < 60.0:

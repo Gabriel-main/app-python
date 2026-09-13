@@ -15,7 +15,7 @@ from core.events import SymbolsListEvent
 class SymbolRepository(Protocol):
     """Interfaz para repositorio de símbolos."""
 
-    async def get_trading_symbols(self, trading_type: str = "SPOT") -> list[dict]: ...
+    async def get_trading_symbols(self, trading_type: str = "SPOT", currency: str | None = None) -> list[dict]: ...
     def clear_cache(self) -> None: ...
     async def validate_symbol(
         self, symbol: str, trading_type: str,
@@ -28,8 +28,8 @@ class BinanceSymbolRepository:
     def __init__(self, binance_service: object) -> None:
         self._service = binance_service
 
-    async def get_trading_symbols(self, trading_type: str = "SPOT") -> list[dict]:
-        return await self._service.get_trading_symbols(trading_type)
+    async def get_trading_symbols(self, trading_type: str = "SPOT", currency: str | None = None) -> list[dict]:
+        return await self._service.get_trading_symbols(trading_type, currency)
 
     def clear_cache(self) -> None:
         self._service.clear_symbols_cache()
@@ -50,9 +50,9 @@ class BinanceSymbolRepository:
 class EventBusSymbolRepository:
     """Implementación que usa EventBus para solicitar símbolos."""
 
-    async def get_trading_symbols(self, trading_type: str = "SPOT") -> list[dict]:
+    async def get_trading_symbols(self, trading_type: str = "SPOT", currency: str | None = None) -> list[dict]:
         from services.binance_service import binance_service
-        return await binance_service.get_trading_symbols(trading_type)
+        return await binance_service.get_trading_symbols(trading_type, currency)
 
     def clear_cache(self) -> None:
         from services.binance_service import binance_service
