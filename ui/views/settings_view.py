@@ -22,6 +22,7 @@ from ui.components.settings_sections import (
     ConfirmDialogHelper,
     OperationParamsSection,
     SettingsFormData,
+    SymbolValidationIndicator,
     TradingModeSection,
     TradingTypeSection,
 )
@@ -33,16 +34,24 @@ class SettingsView(ft.Column):
     def __init__(self, persistence=None, symbol_repository=None) -> None:
         super().__init__()
         self._persistence = persistence or EnvSettingsPersistence()
+        self._symbol_repository = symbol_repository
         self._bot_active: bool = False
         self._page: ft.Page | None = None
 
         # --- Secciones ---
         self._mode_section = TradingModeSection(on_change=self._update_save_button_state)
-        self._type_section = TradingTypeSection(on_change=self._update_save_button_state)
+        self._type_section = TradingTypeSection(
+            on_change=self._update_save_button_state,
+            on_type_changed=self._on_trading_type_changed_for_validation,
+        )
         self._params_section = OperationParamsSection(
             symbol_repository=symbol_repository,
             on_change=self._update_save_button_state,
+            on_symbol_changed_for_validation=self._on_symbol_changed_for_validation,
         )
+
+        # --- Indicador de validación ---
+        self._validation_indicator = SymbolValidationIndicator()
 
         # --- Botón guardar ---
         self._save_btn = ft.FilledButton(
@@ -66,6 +75,11 @@ class SettingsView(ft.Column):
             self._mode_section,
             self._type_section,
             self._params_section,
+            ft.Container(
+                content=self._validation_indicator,
+                width=380,
+                padding=ft.Padding.only(left=4, bottom=4),
+            ),
             ft.Row(controls=[self._save_btn], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row(controls=[self._feedback_text], alignment=ft.MainAxisAlignment.CENTER),
         ]
@@ -133,11 +147,47 @@ class SettingsView(ft.Column):
         )
 
     def _update_save_button_state(self) -> None:
-        self._save_btn.disabled = not self._has_changes()
+        has_changes = self._has_changes()
+        symbol_valid = not self._validation_indicator.visible or (
+            self._validation_indicator._icon.color == ft.Colors.GREEN_400
+        )
+        self._save_btn.disabled = not has_changes or not symbol_valid
         try:
             self._save_btn.update()
         except RuntimeError:
             pass
+
+    # ------------------------------------------------------------------
+    # Validación de símbolo
+    # ------------------------------------------------------------------
+    def _on_symbol_changed_for_validation(self, symbol: str) -> None:
+        asyncio.create_task(self._validate_current_symbol())
+
+    def _on_trading_type_changed_for_validation(self, trading_type: str) -> None:
+        self._params_section.update_trading_type(trading_type)
+        asyncio.create_task(self._validate_current_symbol())
+
+    async def _validate_current_symbol(self) -> None:
+        symbol = self._params_section.get_symbol()
+        trading_type = self._type_section.get_trading_type()
+        self._validation_indicator.set_status(
+            SymbolValidationIndicator.VALIDATING, symbol, trading_type,
+        )
+        try:
+            exists, symbols = await self._symbol_repository.validate_symbol(
+                symbol, trading_type,
+            )
+            if exists:
+                self._validation_indicator.set_status(
+                    SymbolValidationIndicator.VALID, symbol, trading_type,
+                )
+            else:
+                self._validation_indicator.set_status(
+                    SymbolValidationIndicator.INVALID, symbol, trading_type, symbols,
+                )
+        except Exception:
+            self._validation_indicator.set_status(SymbolValidationIndicator.ERROR)
+        self._update_save_button_state()
 
     # ------------------------------------------------------------------
     # Build form data

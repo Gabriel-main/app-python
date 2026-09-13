@@ -191,6 +191,11 @@ class BinanceService:
 
         try:
             self._client = await create_client()
+
+            # Validar símbolo en el mercado seleccionado (SRP: validación separada)
+            if not await self._validate_symbol(self._client):
+                return
+
             log.info(
                 "Creating %s stream for %s...",
                 settings.TRADING_TYPE, settings.TRADING_SYMBOL,
@@ -201,7 +206,7 @@ class BinanceService:
 
             # Seleccionar stream según TRADING_TYPE (OCP: un solo punto de ramificación)
             if settings.TRADING_TYPE == "FUTURES":
-                stream_context = bm.symbol_ticker_futures_socket(symbol_lower)
+                stream_context = bm.individual_symbol_ticker_futures_socket(symbol_lower)
             else:  # SPOT / MARGIN
                 stream_context = bm.symbol_ticker_socket(symbol_lower)
 
@@ -213,9 +218,20 @@ class BinanceService:
                 log.info("WebSocket connected: %s@ticker (%s)", symbol_lower, settings.TRADING_TYPE)
 
                 while self._running:
-                    msg = await ts.recv()
+                    try:
+                        msg = await asyncio.wait_for(ts.recv(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        log.warning("No messages in 15s for %s. Stream may be silent.", settings.TRADING_SYMBOL)
+                        continue
+
                     if msg.get("e") == "error":
                         raise Exception(f"WS Error: {msg}")
+
+                    log.debug("Raw WS msg: %s", msg)
+
+                    # Futures messages are wrapped: {"stream": "...", "data": {...}}
+                    if "data" in msg:
+                        msg = msg["data"]
 
                     tick = self._parse_binance_ticker(msg)
                     event_bus.publish(tick)
@@ -229,6 +245,46 @@ class BinanceService:
             raise
         finally:
             await self._close_client()
+
+    @staticmethod
+    def _normalize_price(ticker: dict, trading_type: str) -> str:
+        """Extrae el precio de un ticker según el mercado (DRY)."""
+        if trading_type == "FUTURES":
+            return ticker.get("lastPrice", "0.00000000")
+        return ticker.get("price", "0.00000000")
+
+    @staticmethod
+    async def validate_symbol_for_market(
+        client, symbol: str, trading_type: str,
+    ) -> tuple[bool, list[str]]:
+        """Valida si un símbolo existe en un mercado. Retorna (existe, disponibles)."""
+        symbol_upper = symbol.upper()
+        try:
+            if trading_type == "FUTURES":
+                info = await client.futures_exchange_info()
+            else:
+                info = await client.get_exchange_info()
+            symbols = [s["symbol"] for s in info.get("symbols", [])]
+            return symbol_upper in symbols, symbols
+        except Exception as exc:
+            log.error("Failed to validate symbol: %s", exc)
+            return False, []
+
+    async def _validate_symbol(self, client) -> bool:
+        """Valida que el símbolo exista en el mercado seleccionado."""
+        exists, _ = await self.validate_symbol_for_market(
+            client, settings.TRADING_SYMBOL, settings.TRADING_TYPE,
+        )
+        if not exists:
+            log.warning(
+                "Symbol %s not found in %s",
+                settings.TRADING_SYMBOL, settings.TRADING_TYPE,
+            )
+            event_bus.publish(ConnectionStatusEvent(
+                status="DISCONNECTED",
+                message=f"{settings.TRADING_SYMBOL} no existe en {settings.TRADING_TYPE}.",
+            ))
+        return exists
 
     # ------------------------------------------------------------------
     # Stream simulado (Paper mode sin keys)
@@ -280,20 +336,22 @@ class BinanceService:
     # Consulta de símbolos (USDT/USDC) con precios
     # ------------------------------------------------------------------
 
-    _symbols_cache: list[dict] | None = None
-    _symbols_cache_time: float = 0.0
+    _symbols_cache: dict[str, list[dict]] = {}
+    _symbols_cache_time: dict[str, float] = {}
 
     def clear_symbols_cache(self) -> None:
         """Limpia el caché de símbolos para forzar recarga."""
-        self._symbols_cache = None
-        self._symbols_cache_time = 0.0
+        self._symbols_cache = {}
+        self._symbols_cache_time = {}
 
-    async def get_trading_symbols(self) -> list[dict]:
+    async def get_trading_symbols(self, trading_type: str = "SPOT") -> list[dict]:
         """Obtiene símbolos disponibles (USDT/USDC) con precios actuales.
-        Cache de 60 segundos para evitar rate limits."""
+        Cache de 60 segundos por mercado para evitar rate limits."""
+        currency = settings.TRADE_CURRENCY
+        cache_key = f"{trading_type}_{currency}"
         now = time.time()
-        if self._symbols_cache and (now - self._symbols_cache_time) < 60.0:
-            return self._symbols_cache
+        if cache_key in self._symbols_cache and (now - self._symbols_cache_time.get(cache_key, 0)) < 60.0:
+            return self._symbols_cache[cache_key]
 
         from services.binance_client import create_client
 
@@ -301,11 +359,18 @@ class BinanceService:
         try:
             client = await create_client()
 
-            exchange_info = await client.get_exchange_info()
-            all_prices = await client.get_all_tickers()
-            price_map = {t["symbol"]: t["price"] for t in all_prices}
+            if trading_type == "FUTURES":
+                exchange_info = await client.futures_exchange_info()
+                all_prices = await client.futures_ticker()
+            else:  # SPOT / MARGIN
+                exchange_info = await client.get_exchange_info()
+                all_prices = await client.get_all_tickers()
 
-            currency = settings.TRADE_CURRENCY
+            price_map = {
+                t["symbol"]: self._normalize_price(t, trading_type)
+                for t in all_prices
+            }
+
             results = []
             for s in exchange_info["symbols"]:
                 if s["quoteAsset"] == currency and s["status"] == "TRADING":
@@ -320,16 +385,16 @@ class BinanceService:
             # Ordenar por precio descendente (BTC primero)
             results.sort(key=lambda x: float(x["price"]), reverse=True)
 
-            self._symbols_cache = results
-            self._symbols_cache_time = now
+            self._symbols_cache[cache_key] = results
+            self._symbols_cache_time[cache_key] = now
 
-            event_bus.publish(SymbolsListEvent(symbols=results))
-            log.info("Loaded %d %s symbols from Binance", len(results), currency)
+            event_bus.publish(SymbolsListEvent(symbols=results, trading_type=trading_type))
+            log.info("Loaded %d %s %s symbols from Binance", len(results), currency, trading_type)
             return results
 
         except Exception as exc:
-            log.error("Error fetching symbols: %s", exc)
-            return self._symbols_cache or []
+            log.error("Error fetching %s symbols: %s", trading_type, exc)
+            return self._symbols_cache.get(cache_key, [])
         finally:
             if client:
                 try:

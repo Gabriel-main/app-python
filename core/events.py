@@ -34,6 +34,7 @@ class PriceTickEvent:
 class SymbolsListEvent:
     """Lista de símbolos disponibles (USDT/USDC) con precios actuales."""
     symbols: list[dict]  # [{symbol, base_asset, quote_asset, price}]
+    trading_type: str = "SPOT"
     timestamp: float = field(default_factory=time.time)
 
 

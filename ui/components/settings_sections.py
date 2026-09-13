@@ -34,6 +34,65 @@ def _set_fields_disabled(section: ft.Container, disabled: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Indicador de validación de símbolo (SRP: solo muestra estado)
+# ---------------------------------------------------------------------------
+class SymbolValidationIndicator(ft.Row):
+    """Muestra el resultado de validar un símbolo en el mercado seleccionado."""
+
+    IDLE = "idle"
+    VALIDATING = "validating"
+    VALID = "valid"
+    INVALID = "invalid"
+    ERROR = "error"
+
+    def __init__(self) -> None:
+        self._icon = ft.Icon(
+            ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_400, size=16,
+        )
+        self._text = ft.Text("", size=12)
+        super().__init__(
+            controls=[self._icon, self._text], spacing=4, visible=False,
+        )
+
+    def set_status(
+        self,
+        status: str,
+        symbol: str = "",
+        trading_type: str = "",
+        available: list[str] | None = None,
+    ) -> None:
+        if status == self.VALIDATING:
+            self._icon.name = ft.Icons.HOURGLASS_EMPTY
+            self._icon.color = ft.Colors.GREY_400
+            self._text.value = f"Verificando {symbol}..."
+            self.visible = True
+        elif status == self.VALID:
+            self._icon.name = ft.Icons.CHECK_CIRCLE
+            self._icon.color = ft.Colors.GREEN_400
+            self._text.value = f"{symbol} existe en {trading_type}"
+            self.visible = True
+        elif status == self.INVALID:
+            self._icon.name = ft.Icons.CANCEL
+            self._icon.color = ft.Colors.RED_400
+            examples = ", ".join(available[:5]) if available else "BTCUSDT, ETHUSDT..."
+            self._text.value = (
+                f"{symbol} no existe en {trading_type}. Prueba: {examples}"
+            )
+            self.visible = True
+        elif status == self.ERROR:
+            self._icon.name = ft.Icons.WARNING
+            self._icon.color = ft.Colors.AMBER_400
+            self._text.value = "No se pudo validar. Conéctate a internet."
+            self.visible = True
+        else:
+            self.visible = False
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # DTO
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -254,9 +313,10 @@ class TradingModeSection(ft.Container):
 class TradingTypeSection(ft.Container):
     """Sección: Tipo de trading + leverage + order type + limit price."""
 
-    def __init__(self, on_change=None) -> None:
+    def __init__(self, on_change=None, on_type_changed=None) -> None:
         super().__init__()
         self._on_change = on_change
+        self._on_type_changed = on_type_changed
 
         self._trading_type_dropdown = _dropdown(
             label="Tipo de Trading",
@@ -325,6 +385,8 @@ class TradingTypeSection(ft.Container):
         except RuntimeError:
             pass
         self._notify_change()
+        if self._on_type_changed:
+            self._on_type_changed(e.control.value)
 
     def _on_order_type_changed(self, e: ft.ControlEvent) -> None:
         is_limit = e.control.value == "LIMIT"
@@ -389,9 +451,15 @@ class TradingTypeSection(ft.Container):
 class OperationParamsSection(ft.Container):
     """Sección: Monto, moneda, símbolo, stop loss, temporalidad."""
 
-    def __init__(self, symbol_repository=None, on_change=None) -> None:
+    def __init__(
+        self,
+        symbol_repository=None,
+        on_change=None,
+        on_symbol_changed_for_validation=None,
+    ) -> None:
         super().__init__()
         self._on_change = on_change
+        self._on_symbol_changed_for_validation = on_symbol_changed_for_validation
 
         self._amount_field = _textfield(
             label="Monto",
@@ -484,6 +552,8 @@ class OperationParamsSection(ft.Container):
 
     def _on_symbol_changed(self, symbol: str) -> None:
         self._notify_change()
+        if self._on_symbol_changed_for_validation:
+            self._on_symbol_changed_for_validation(symbol)
 
     def _notify_change(self, *args) -> None:
         if self._on_change:
@@ -512,6 +582,10 @@ class OperationParamsSection(ft.Container):
 
     def refresh_symbols(self) -> None:
         self._symbol_picker.refresh_symbols()
+
+    def update_trading_type(self, trading_type: str) -> None:
+        """Notifica al SymbolPicker que el mercado cambió."""
+        self._symbol_picker.set_trading_type(trading_type)
 
     def restore(self, form_snapshot: dict) -> None:
         self._amount_field.value = str(form_snapshot["amount"])

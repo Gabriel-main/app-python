@@ -179,10 +179,13 @@ async def main(page: ft.Page) -> None:
     from ui.views.orders_view import OrdersView
     from ui.views.settings_view import SettingsView
     from ui.views.audit_view import AuditView
+    from services.symbol_repository import BinanceSymbolRepository
 
     dashboard = DashboardView()
     orders = OrdersView(order_repository=SQLOrderRepository())
-    settings_view = SettingsView()
+    settings_view = SettingsView(
+        symbol_repository=BinanceSymbolRepository(binance_service)
+    )
     audit_view = AuditView()
 
     views = [dashboard, orders, settings_view, audit_view]
