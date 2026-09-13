@@ -83,6 +83,7 @@ class SymbolListManager:
         if trading_type == self._trading_type:
             return False
         self._trading_type = trading_type
+        self._symbols = []
         self._search_query = ""
         self._fetch_generation += 1
         return True
@@ -259,7 +260,9 @@ class SymbolPicker(ft.Container):
     async def _load_symbols(self) -> None:
         try:
             self._set_loading(True)
-            await self._mgr.load_symbols()
+            gen = await self._mgr.load_symbols()
+            if gen != self._mgr._fetch_generation:
+                return
         except Exception as exc:
             log.error("Error loading symbols: %s", exc)
             self._set_loading(False)

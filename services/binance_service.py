@@ -351,7 +351,9 @@ class BinanceService:
         cache_key = f"{trading_type}_{currency}"
         now = time.time()
         if cache_key in self._symbols_cache and (now - self._symbols_cache_time.get(cache_key, 0)) < 60.0:
-            return self._symbols_cache[cache_key]
+            cached = self._symbols_cache[cache_key]
+            event_bus.publish(SymbolsListEvent(symbols=cached, trading_type=trading_type))
+            return cached
 
         from services.binance_client import create_client
 
@@ -371,16 +373,19 @@ class BinanceService:
                 for t in all_prices
             }
 
-            results = []
+            deduped: dict[str, dict] = {}
             for s in exchange_info["symbols"]:
                 if s["quoteAsset"] == currency and s["status"] == "TRADING":
+                    if trading_type == "FUTURES" and s.get("contractType") != "PERPETUAL":
+                        continue
                     symbol = s["symbol"]
-                    results.append({
+                    deduped[symbol] = {
                         "symbol": symbol,
                         "base_asset": s["baseAsset"],
                         "quote_asset": s["quoteAsset"],
                         "price": price_map.get(symbol, "0.00000000"),
-                    })
+                    }
+            results = list(deduped.values())
 
             # Ordenar por precio descendente (BTC primero)
             results.sort(key=lambda x: float(x["price"]), reverse=True)

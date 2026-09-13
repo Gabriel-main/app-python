@@ -82,7 +82,7 @@ class PaperBalanceService:
     # Handler
     # ------------------------------------------------------------------
 
-    def _on_order_executed(self, event: OrderExecutedEvent) -> None:
+    async def _on_order_executed(self, event: OrderExecutedEvent) -> None:
         if event.mode != "PAPER":
             return
 
