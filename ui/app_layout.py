@@ -6,6 +6,7 @@ Monta la app Flet con:
 - NavigationBar inferior con 3 tabs: Dashboard / Órdenes / Configuración
 - Gestión del ciclo de vida de los servicios (start/stop)
 - Tema oscuro premium con paleta azul-índigo
+- Sistema de autenticación con login
 
 Regla: Inicia todos los servicios en on_connect (no en __init__).
 """
@@ -22,10 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import NavigateToEvent
+from core.events import AuthStateChangedEvent, NavigateToEvent
 from core.logger import setup_logging
 from database.connection import create_db_and_tables
 from database.db_queue import db_queue
+from services.auth_service import auth_service
 from services.binance_service import binance_service
 from services.bot_engine import bot_engine
 from services.config_service import config_service
@@ -54,6 +56,11 @@ async def main(page: ft.Page) -> None:
         color_scheme_seed=ft.Colors.BLUE,
         font_family="Roboto",
     )
+
+    # ------------------------------------------------------------------
+    # Configurar servicio de autenticación
+    # ------------------------------------------------------------------
+    auth_service.configure(settings.APP_USERNAME, settings.APP_PASSWORD)
 
     # ------------------------------------------------------------------
     # Barra de navegación inferior
@@ -110,10 +117,21 @@ async def main(page: ft.Page) -> None:
     )
 
     views: list = []
+    settings_view_ref = None  # Referencia para navegación index=4
     current_view_index = 0
+    is_authenticated = False
 
     def _navigate(index: int) -> None:
         nonlocal current_view_index
+        if not is_authenticated:
+            return
+        # index=4 es para SettingsView (accedido desde Config)
+        if index == 4:
+            if settings_view_ref:
+                view_container.content = settings_view_ref
+                view_container.update()
+                current_view_index = 4
+            return
         if index == current_view_index:
             return
         current_view_index = index
@@ -126,6 +144,12 @@ async def main(page: ft.Page) -> None:
 
     async def _on_navigate_to(e: NavigateToEvent) -> None:
         _navigate(e.index)
+
+    # ------------------------------------------------------------------
+    # Vista de Login
+    # ------------------------------------------------------------------
+    from ui.views.login_view import LoginView
+    login_view = LoginView()
 
     # ------------------------------------------------------------------
     # Layout principal con fondo gradiente
@@ -150,12 +174,72 @@ async def main(page: ft.Page) -> None:
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Manejo de estado de autenticación
+    # ------------------------------------------------------------------
+    def _show_login() -> None:
+        nonlocal is_authenticated
+        is_authenticated = False
+        nav_bar.visible = False
+        view_container.content = login_view
+        view_container.update()
+        nav_bar.update()
+
+    def _show_main_app() -> None:
+        nonlocal is_authenticated, settings_view_ref
+        is_authenticated = True
+        nav_bar.visible = True
+        nav_bar.selected_index = 0
+        current_view_index = 0
+
+        # Construir vistas DESPUÉS de autenticar
+        from ui.views.dashboard_view import DashboardView
+        from ui.views.orders_view import OrdersView
+        from ui.views.settings_view import SettingsView
+        from ui.views.config_view import ConfigView
+        from ui.views.audit_view import AuditView
+        from services.symbol_repository import BinanceSymbolRepository
+
+        dashboard = DashboardView()
+        orders = OrdersView(order_repository=SQLOrderRepository())
+        settings_view_ref = SettingsView(
+            symbol_repository=BinanceSymbolRepository(binance_service)
+        )
+        config_view = ConfigView()
+        audit_view = AuditView()
+
+        views.clear()
+        views.extend([dashboard, orders, config_view, audit_view])
+
+        view_container.content = dashboard
+        view_container.update()
+        nav_bar.update()
+
+    async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
+        if e.is_authenticated:
+            _show_main_app()
+        else:
+            _show_login()
+
+    # ------------------------------------------------------------------
+    # Mostrar login o app según estado
+    # ------------------------------------------------------------------
+    if auth_service.is_authenticated:
+        nav_bar.visible = True
+    else:
+        nav_bar.visible = False
+        view_container.content = login_view
+
     page.add(
         ft.SafeArea(
             expand=True,
             content=background,
         )
     )
+
+    # After page is added, update if authenticated
+    if auth_service.is_authenticated:
+        _show_main_app()
 
     # ------------------------------------------------------------------
     # Resize handler — propaga tamaño a vistas hijas
@@ -174,24 +258,6 @@ async def main(page: ft.Page) -> None:
     await config_service.init_from_env()
     await settings.load_from_db()
 
-    # Construir vistas DESPUÉS de cargar config (OCP:BalanceCard lee TRADING_TYPE correcto)
-    from ui.views.dashboard_view import DashboardView
-    from ui.views.orders_view import OrdersView
-    from ui.views.settings_view import SettingsView
-    from ui.views.audit_view import AuditView
-    from services.symbol_repository import BinanceSymbolRepository
-
-    dashboard = DashboardView()
-    orders = OrdersView(order_repository=SQLOrderRepository())
-    settings_view = SettingsView(
-        symbol_repository=BinanceSymbolRepository(binance_service)
-    )
-    audit_view = AuditView()
-
-    views = [dashboard, orders, settings_view, audit_view]
-    view_container.content = dashboard
-    view_container.update()
-
     await event_bus.start()
     await db_queue.start()
     await audit_service.start()
@@ -200,6 +266,7 @@ async def main(page: ft.Page) -> None:
     await binance_service.start()
 
     event_bus.subscribe(NavigateToEvent, _on_navigate_to)
+    event_bus.subscribe(AuthStateChangedEvent, _on_auth_changed)
 
     # ------------------------------------------------------------------
     # Limpieza al cerrar

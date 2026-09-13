@@ -170,7 +170,7 @@ class SettingsUpdatedEvent:
 @dataclass
 class NavigateToEvent:
     """Solicitud de navegación a un tab específico."""
-    index: int  # 0=Dashboard, 1=Órdenes, 2=Config, 3=Auditoría
+    index: int  # 0=Dashboard, 1=Órdenes, 2=Config, 3=Auditoría, 4=Settings(Ajustes del Bot)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +224,23 @@ class InitialOrderEvent:
     side: str = ""
     quantity: float = 0.0
     price: float = 0.0
+    timestamp: float = field(default_factory=time.time)
+
+
+# ---------------------------------------------------------------------------
+# Eventos de Autenticación
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuthStateChangedEvent:
+    """Cambio de estado de autenticación del usuario."""
+    is_authenticated: bool
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class LogoutRequestedEvent:
+    """Solicitud de cierre de sesión."""
     timestamp: float = field(default_factory=time.time)
 
 

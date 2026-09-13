@@ -29,7 +29,7 @@ from ui.components.settings_sections import (
 
 
 class SettingsView(ft.Column):
-    """Pantalla de configuración del bot."""
+    """Pantalla de ajustes del bot de trading."""
 
     def __init__(self, persistence=None, symbol_repository=None) -> None:
         super().__init__()
@@ -69,9 +69,30 @@ class SettingsView(ft.Column):
 
         self._feedback_text = ft.Text("", size=12, color=ft.Colors.GREEN_400)
 
+        # --- Botón regresar ---
+        self._back_btn = ft.IconButton(
+            icon=ft.Icons.ARROW_BACK_IOS,
+            icon_color=ft.Colors.BLUE_400,
+            icon_size=20,
+            on_click=self._on_back,
+            tooltip="Volver a Configuración",
+        )
+
         # --- Layout ---
         self.controls = [
-            ft.Text("Configuración", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, text_align=ft.TextAlign.CENTER),
+            ft.Row(
+                controls=[
+                    self._back_btn,
+                    ft.Text(
+                        "Ajustes del Bot",
+                        size=22,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.WHITE,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
             ft.Container(width=380, content=ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=20)),
             self._mode_section,
             self._type_section,
@@ -243,6 +264,10 @@ class SettingsView(ft.Column):
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
+    def _on_back(self, e: ft.ControlEvent) -> None:
+        """Regresa a la vista de Configuración."""
+        event_bus.publish(NavigateToEvent(index=2))
+
     def _on_save(self, e: ft.ControlEvent) -> None:
         if self._bot_active:
             self._show_bot_active_warning()

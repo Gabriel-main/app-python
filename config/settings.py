@@ -14,6 +14,10 @@ load_dotenv(BASE_DIR / ".env")
 
 
 class Settings:
+    # --- Autenticación (desde .env) ---
+    APP_USERNAME: str = os.getenv("APP_USERNAME", "")
+    APP_PASSWORD: str = os.getenv("APP_PASSWORD", "")
+
     # --- Sensibles (desde .env) ---
     BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
     BINANCE_API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
@@ -96,6 +100,8 @@ class Settings:
     def reload_from_env(self) -> None:
         """Recarga SOLO variables sensibles desde .env."""
         load_dotenv(BASE_DIR / ".env", override=True)
+        self.APP_USERNAME = os.getenv("APP_USERNAME", "")
+        self.APP_PASSWORD = os.getenv("APP_PASSWORD", "")
         self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
         self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
         self.BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
