@@ -85,6 +85,7 @@ class BalanceCard(StatCard):
 
     def did_mount(self) -> None:
         self._setup_subscriptions()
+        self._sync_from_settings()
 
     def will_unmount(self) -> None:
         self._teardown_subscriptions()
@@ -113,8 +114,7 @@ class BalanceCard(StatCard):
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
         """Actualiza valores con datos reales del balance."""
-        if event.trading_type != settings.TRADING_TYPE:
-            self._sync_from_settings()
+        self._sync_from_settings()
 
         self._last_update = event.timestamp
         self._loading.visible = False
