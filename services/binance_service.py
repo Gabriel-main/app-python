@@ -24,6 +24,8 @@ from core.event_bus import event_bus
 from core.events import (
     BalanceUpdateEvent,
     ConnectionStatusEvent,
+    ConnectionStatusRequestEvent,
+    ConnectionStatusSnapshotEvent,
     PriceTickEvent,
     SettingsUpdatedEvent,
     SymbolsListEvent,
@@ -90,6 +92,7 @@ class BinanceService:
         self._client = None
         self._mock = MockTickGenerator()
         self._retry_count: int = 0
+        self._connection_status: str = "DISCONNECTED"
 
         # Balance auto-refresh
         self._balance_task: asyncio.Task | None = None
@@ -105,6 +108,7 @@ class BinanceService:
         self._running = True
         self._retry_count = 0
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
         self._stream_task = asyncio.create_task(
             self._run_with_reconnect(), name="binance_stream"
         )
@@ -114,6 +118,7 @@ class BinanceService:
     async def stop(self) -> None:
         self._running = False
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        event_bus.unsubscribe(ConnectionStatusRequestEvent, self._on_status_request)
         self._stop_balance_loop()
         if self._stream_task:
             self._stream_task.cancel()
@@ -123,6 +128,27 @@ class BinanceService:
                 pass
         await self._close_client()
         log.info("BinanceService stopped")
+
+    # ------------------------------------------------------------------
+    # Estado de conexión (para ConnectionIndicator)
+    # ------------------------------------------------------------------
+
+    async def _on_status_request(self, event: ConnectionStatusRequestEvent) -> None:
+        """Responde con el estado actual de conexión."""
+        event_bus.publish(ConnectionStatusSnapshotEvent(
+            status=self._connection_status,
+            message=self._get_status_message(),
+        ))
+
+    def _get_status_message(self) -> str:
+        """Genera el mensaje según el estado actual."""
+        messages = {
+            "CONNECTING":   f"Conectando a {settings.TRADING_SYMBOL}...",
+            "CONNECTED":    f"Conectado a {settings.TRADING_SYMBOL} ({settings.TRADING_TYPE})",
+            "DISCONNECTED": "Desconectado",
+            "RECONNECTING": f"Reintentando... (intento {self._retry_count})",
+        }
+        return messages.get(self._connection_status, self._connection_status)
 
     async def restart(self) -> None:
         """Reinicia el servicio (usado tras cambio de configuración)."""
@@ -144,6 +170,7 @@ class BinanceService:
     async def _run_with_reconnect(self) -> None:
         while self._running:
             try:
+                self._connection_status = "CONNECTING"
                 event_bus.publish(ConnectionStatusEvent(
                     status="CONNECTING",
                     message=f"Conectando a {settings.TRADING_SYMBOL}..."
@@ -167,12 +194,14 @@ class BinanceService:
                     "BinanceService error (retry %d): %s. Waiting %.1fs...",
                     self._retry_count, exc, delay
                 )
+                self._connection_status = "RECONNECTING"
                 event_bus.publish(ConnectionStatusEvent(
                     status="RECONNECTING",
                     message=f"Reintentando en {delay:.0f}s... (intento {self._retry_count})"
                 ))
                 if self._retry_count > settings.RECONNECT_MAX_RETRIES:
                     log.critical("Max retries exceeded. Stopping BinanceService.")
+                    self._connection_status = "DISCONNECTED"
                     event_bus.publish(ConnectionStatusEvent(
                         status="DISCONNECTED",
                         message="Máximo de reintentos alcanzado."
@@ -211,6 +240,7 @@ class BinanceService:
                 stream_context = bm.symbol_ticker_socket(symbol_lower)
 
             async with stream_context as ts:
+                self._connection_status = "CONNECTED"
                 event_bus.publish(ConnectionStatusEvent(
                     status="CONNECTED",
                     message=f"Conectado a {settings.TRADING_SYMBOL} ({settings.TRADING_TYPE})"
@@ -280,6 +310,7 @@ class BinanceService:
                 "Symbol %s not found in %s",
                 settings.TRADING_SYMBOL, settings.TRADING_TYPE,
             )
+            self._connection_status = "DISCONNECTED"
             event_bus.publish(ConnectionStatusEvent(
                 status="DISCONNECTED",
                 message=f"{settings.TRADING_SYMBOL} no existe en {settings.TRADING_TYPE}.",
@@ -292,6 +323,7 @@ class BinanceService:
 
     async def _run_mock_stream(self) -> None:
         log.warning("No API keys found. Running MOCK tick generator.")
+        self._connection_status = "CONNECTED"
         event_bus.publish(ConnectionStatusEvent(
             status="CONNECTED",
             message="Modo Simulación (Sin API Keys)"

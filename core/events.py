@@ -144,6 +144,20 @@ class ConnectionStatusEvent:
 
 
 @dataclass
+class ConnectionStatusRequestEvent:
+    """Solicitud del estado actual de conexión (UI → Backend)."""
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class ConnectionStatusSnapshotEvent:
+    """Snapshot del estado actual de conexión (Backend → UI)."""
+    status: Literal["CONNECTING", "CONNECTED", "DISCONNECTED", "RECONNECTING"]
+    message: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
 class BotStateChangedEvent:
     """El bot fue activado o desactivado desde la UI."""
     is_running: bool
