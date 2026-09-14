@@ -3,7 +3,8 @@ App Layout — Shell principal con NavigationBar y login.
 
 Monta la app Flet con:
 - Sistema de autenticación con login
-- AnimatedSwitcher para transiciones suaves entre vistas
+- AnimatedSwitcher para transiciones de login
+- Navegación directa (sin animación) entre vistas
 - NavigationBar inferior con 4 tabs
 - Tema oscuro premium con paleta azul-índigo
 
@@ -11,6 +12,7 @@ Refactorizado para aplicar SOLID:
 - SRP: view_registry crea vistas, navigator maneja transiciones
 - OCP: agregar vista = 1 línea en ViewRegistry.register_all()
 - DIP: app_layout orquesta, no instancia widgets directamente
+- DRY: _update_nav_bar() elimina repetición
 """
 from __future__ import annotations
 
@@ -130,7 +132,15 @@ async def main(page: ft.Page) -> None:
     )
 
     view_registry = ViewRegistry()
-    navigator = Navigator(animated_switcher)
+    navigator = Navigator(animated_switcher, view_container)
+
+    # ------------------------------------------------------------------
+    # Funciones auxiliares (DRY)
+    # ------------------------------------------------------------------
+    def _update_nav_bar(visible: bool) -> None:
+        """Actualiza visibilidad de la barra de navegación."""
+        nav_bar.visible = visible
+        nav_bar.update()
 
     # ------------------------------------------------------------------
     # Layout principal
@@ -161,7 +171,7 @@ async def main(page: ft.Page) -> None:
         view = view_registry.get(index)
         if view:
             navigator.navigate_to(index, view)
-            if index == 2:
+            if index == 4:
                 view.refresh_symbols()
 
     async def _on_navigate_to(e: NavigateToEvent) -> None:
@@ -172,16 +182,14 @@ async def main(page: ft.Page) -> None:
     # ------------------------------------------------------------------
     def _show_login() -> None:
         navigator.reset()
-        nav_bar.visible = False
-        navigator.navigate_to(-1, login_view)
-        nav_bar.update()
+        _update_nav_bar(False)
+        navigator.navigate_to(-1, login_view, animate=True)
 
     def _show_main_app() -> None:
         view_registry.register_all()
-        nav_bar.visible = True
+        _update_nav_bar(True)
         nav_bar.selected_index = 0
-        navigator.navigate_to(0, view_registry.dashboard)
-        nav_bar.update()
+        navigator.navigate_to(0, view_registry.dashboard, animate=True)
 
     async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
         if e.is_authenticated:
