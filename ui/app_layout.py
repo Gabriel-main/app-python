@@ -132,7 +132,7 @@ async def main(page: ft.Page) -> None:
     )
 
     view_registry = ViewRegistry()
-    navigator = Navigator(animated_switcher, view_container)
+    navigator = Navigator(animated_switcher)
 
     # ------------------------------------------------------------------
     # Funciones auxiliares (DRY)
@@ -191,11 +191,17 @@ async def main(page: ft.Page) -> None:
         nav_bar.selected_index = 0
         navigator.navigate_to(0, view_registry.dashboard, animate=True)
 
+    def _clear_overlay() -> None:
+        """Limpia diálogos del overlay después de logout."""
+        page.overlay.clear()
+        page.update()
+
     async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
         if e.is_authenticated:
             _show_main_app()
         else:
             _show_login()
+            _clear_overlay()
 
     # ------------------------------------------------------------------
     # Estado inicial (antes de agregar a page)

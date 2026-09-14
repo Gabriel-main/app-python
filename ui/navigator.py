@@ -2,7 +2,7 @@
 Navigator — Navegación entre vistas.
 
 SRP: Solo maneja la navegación entre vistas.
-DIP: Depende de ft.Control (abstracción), no de implementaciones concretas.
+DIP: Depende de ft.AnimatedSwitcher (abstracción Flet).
 DRY: Una sola función navigate_to() para cualquier transición.
 """
 from __future__ import annotations
@@ -11,18 +11,18 @@ import flet as ft
 
 
 class Navigator:
-    """Maneja la navegación entre vistas con dos estrategias:
-    - Animada (FADE 500ms): Solo para login/logout
-    - Directa (sin animación): Para navegación entre vistas
+    """Maneja la navegación entre vistas.
+    
+    El animated_switcher SIEMPRE permanece como contenido del view_container.
+    - animate=True: duration=500ms (login/logout)
+    - animate=False: duration=0ms (navegación entre vistas)
     """
 
     def __init__(
         self,
         animated_switcher: ft.AnimatedSwitcher,
-        view_container: ft.Container,
     ) -> None:
         self._switcher = animated_switcher
-        self._container = view_container
         self._current_index: int = -1
 
     def navigate_to(
@@ -36,18 +36,12 @@ class Navigator:
         animate=True: Login/logout con FADE 500ms
         animate=False: Navegación instantánea (default)
         """
-        if index == self._current_index:
+        if not animate and index == self._current_index:
             return
         self._current_index = index
-
-        if animate:
-            self._switcher.transition = ft.AnimatedSwitcherTransition.FADE
-            self._switcher.duration = 500
-            self._switcher.content = view
-            self._switcher.update()
-        else:
-            self._container.content = view
-            self._container.update()
+        self._switcher.duration = 500 if animate else 0
+        self._switcher.content = view
+        self._switcher.update()
 
     def reset(self) -> None:
         """Resetea el índice (útil para logout)."""
