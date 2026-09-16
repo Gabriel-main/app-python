@@ -189,6 +189,14 @@ class DBQueueWorker:
     async def _save_order(self, event: OrderExecutedEvent) -> None:
         try:
             async with get_session() as session:
+                # Verificar si ya existe (defensa en profundidad)
+                from sqlmodel import select
+                stmt = select(Order).where(Order.order_id == event.order_id)
+                result = await session.exec(stmt)
+                if result.first():
+                    log.warning("Order %s already exists, skipping", event.order_id)
+                    return
+
                 order = Order(
                     order_id=event.order_id,
                     symbol=event.symbol,

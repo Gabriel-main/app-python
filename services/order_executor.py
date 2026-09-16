@@ -15,12 +15,24 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import time
+import uuid
 import logging
 
 from config.settings import settings
 
 log = logging.getLogger(__name__)
+
+
+def generate_order_id(prefix: str = "ORDER") -> str:
+    """
+    Genera un order_id único usando UUID4.
+
+    Principios:
+    - SRP: Solo genera IDs, nada más
+    - DRY: Una sola implementación reutilizada
+    - Función pura: Sin estado, sin efectos secundarios
+    """
+    return f"{prefix}-{uuid.uuid4().hex[:12].upper()}"
 
 
 @dataclass
@@ -56,7 +68,7 @@ class PaperExecutor(OrderExecutor):
         entry_price: float = 0.0, stop_loss: float = 0.0,
     ) -> OrderResult:
         fill_price = entry_price if entry_price > 0 else 0.0
-        order_id = f"PAPER-{int(time.time() * 1000)}"
+        order_id = generate_order_id("PAPER")
 
         log.info("[PAPER] %s %s %.6f @ %.4f", side, symbol, quantity, fill_price)
 
@@ -98,7 +110,7 @@ class LiveExecutor(OrderExecutor):
 
         response = await execute_order(self._client, **order_params)
         fill_price = float(response.get("fills", [{}])[0].get("price", entry_price))
-        order_id = str(response.get("orderId", f"LIVE-{int(time.time() * 1000)}"))
+        order_id = str(response.get("orderId", generate_order_id("LIVE")))
 
         log.info("[LIVE] %s %s %.6f @ %.4f", side, symbol, quantity, fill_price)
 
