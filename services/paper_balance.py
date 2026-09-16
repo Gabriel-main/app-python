@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BalanceUpdateEvent, OrderExecutedEvent
+from services.pnl_calculator import PnLCalculator
 
 log = logging.getLogger(__name__)
 
@@ -115,27 +116,18 @@ class PaperBalanceService:
         )
 
     def _handle_sell(self, event: OrderExecutedEvent) -> None:
-        """SELL: cerrar posición, calcular PnL con nueva fórmula, acreditar."""
+        """SELL: cerrar posición, calcular PnL con fórmula unificada."""
         position = self._positions.pop(event.order_id, None)
 
         if position:
-            # Nueva fórmula: ((Pi - SL) / Pi) × 100
-            pi = position.entry_price
-            sl = position.stop_loss
-            capital = position.capital
-            
-            if pi > 0 and sl > 0:
-                pct = ((pi - sl) / pi) * 100
-                if position.side == "BUY":
-                    resultado = capital * (1 - pct / 100)
-                else:
-                    resultado = capital * (1 + pct / 100)
-                pnl = resultado - capital
-            else:
-                resultado = capital
-                pnl = 0.0
-            
-            self._locked -= capital
+            resultado, pnl = PnLCalculator.calc_closed_pnl(
+                capital=position.capital,
+                entry_price=position.entry_price,
+                stop_loss=position.stop_loss,
+                side=position.side,
+            )
+
+            self._locked -= position.capital
             self._free += resultado
             log.debug(
                 "PAPER SELL (closed): pnl=%.4f, free=%.2f",
@@ -155,7 +147,6 @@ class PaperBalanceService:
     # ------------------------------------------------------------------
 
     def _publish_balance(self) -> None:
-        from config.settings import settings
         event_bus.publish(BalanceUpdateEvent(
             asset="USDT",
             trading_type=settings.TRADING_TYPE,

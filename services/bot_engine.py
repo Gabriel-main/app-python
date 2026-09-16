@@ -40,6 +40,8 @@ from core.events import (
 )
 from config.settings import settings
 from database.db_queue import db_queue
+from services.order_executor import OrderExecutor, OrderResult, create_executor
+from services.pnl_calculator import PnLCalculator
 
 log = logging.getLogger(__name__)
 
@@ -80,12 +82,11 @@ class TradingOperation:
 class BotEngine:
     """Motor de trading con modelo dual OC/OV."""
 
-    def __init__(self) -> None:
+    def __init__(self, executor: OrderExecutor | None = None) -> None:
         self._running: bool = False
         self._active: bool = False
         self._current_price: float = 0.0
-        self._client = None
-        self._leverage_set: bool = False
+        self._executor = executor or create_executor(settings.TRADING_MODE)
 
         # Operaciones
         self._operations: list[TradingOperation] = []
@@ -140,7 +141,7 @@ class BotEngine:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
-        await self._close_client()
+        await self._executor.close()
         log.info("BotEngine stopped")
 
     async def _publish_initial_state(self) -> None:
@@ -202,7 +203,6 @@ class BotEngine:
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Recarga parámetros de estrategia."""
         settings.from_event(event)
-        self._leverage_set = False
 
         log.info(
             "BotEngine settings reloaded: Type: %s | Leverage: %dx | SL: %s %s | TF: %d %s",
@@ -249,20 +249,17 @@ class BotEngine:
             if op.state != "ACTIVE":
                 continue
 
-            # Calcular PnL no realizado con nueva fórmula
             if op.side == "BUY":
                 side = "LONG"
             else:
                 side = "SHORT"
 
-            if op.stop_loss > 0 and op.entry_price > 0:
-                pct = ((op.entry_price - op.stop_loss) / op.entry_price) * 100
-                if op.side == "BUY":
-                    unrealized_pnl = settings.TRADE_AMOUNT * (1 - pct / 100) - settings.TRADE_AMOUNT
-                else:
-                    unrealized_pnl = settings.TRADE_AMOUNT * (1 + pct / 100) - settings.TRADE_AMOUNT
-            else:
-                unrealized_pnl = 0.0
+            unrealized_pnl = PnLCalculator.calc_unrealized_pnl(
+                capital=settings.TRADE_AMOUNT,
+                entry_price=op.entry_price,
+                stop_loss=op.stop_loss,
+                side=op.side,
+            )
 
             event_bus.publish(PositionUpdateEvent(
                 symbol=settings.TRADING_SYMBOL,
@@ -312,8 +309,11 @@ class BotEngine:
         self._start_timeframe_timer()
 
     async def _stop_trading(self) -> None:
-        """Detiene trading: elimina pendientes y apaga timer."""
+        """Detiene trading: cierra posiciones y apaga timer."""
         self._stop_timeframe_timer()
+
+        # Cerrar posiciones abiertas
+        await self._close_open_positions()
 
         # Eliminar operaciones pendientes
         self._operations = [op for op in self._operations if op.state == "ACTIVE"]
@@ -575,36 +575,16 @@ class BotEngine:
 
     async def _execute_stop_loss(self, op: TradingOperation, trigger_price: float) -> None:
         """Ejecuta la orden de stop loss."""
-        order_id = f"SL-{uuid.uuid4().hex[:8].upper()}"
-
-        if settings.TRADING_MODE == "PAPER":
-            order_event = OrderExecutedEvent(
-                order_id=order_id,
-                symbol=settings.TRADING_SYMBOL,
-                side=op.side,
-                quantity=op.quantity,
-                price=trigger_price,
-                mode="PAPER",
-                entry_price=op.entry_price,
-                stop_loss=op.stop_loss,
-                trading_type=settings.TRADING_TYPE,
-                leverage=settings.LEVERAGE,
-                order_type="MARKET",
-                timestamp=time.time(),
-            )
-            log.info("[PAPER] SL Order %s: %s %.6f @ %.4f",
-                     order_id, op.side, op.quantity, trigger_price)
-        else:
-            order_event = await self._execute_live_sl(op, trigger_price, order_id)
-            if order_event is None:
-                return
+        order_event = await self._execute_order(op, trigger_price)
+        if order_event is None:
+            return
 
         event_bus.publish(order_event)
         db_queue.enqueue_order(order_event)
         op.state = "PAST"
 
         event_bus.publish(StopLossEvent(
-            order_id=order_id,
+            order_id=order_event.order_id,
             side=op.side,
             quantity=op.quantity,
             price=trigger_price,
@@ -614,122 +594,83 @@ class BotEngine:
         log.info("SL executed, operation marked PAST: %s", op.order_id)
 
     # ------------------------------------------------------------------
-    # Ejecución de órdenes iniciales
+    # Ejecución de órdenes (DRY + DIP)
     # ------------------------------------------------------------------
+
+    def _build_order_event(
+        self, op: TradingOperation, result: OrderResult
+    ) -> OrderExecutedEvent:
+        """Factory method para OrderExecutedEvent (DRY)."""
+        return OrderExecutedEvent(
+            order_id=result.order_id,
+            symbol=settings.TRADING_SYMBOL,
+            side=op.side,
+            quantity=op.quantity,
+            price=result.fill_price,
+            mode=result.mode,
+            entry_price=op.entry_price,
+            stop_loss=op.stop_loss,
+            trading_type=settings.TRADING_TYPE,
+            leverage=settings.LEVERAGE,
+            order_type="MARKET",
+            timestamp=time.time(),
+        )
+
+    async def _execute_order(
+        self, op: TradingOperation, price: float = 0.0
+    ) -> OrderExecutedEvent | None:
+        """Ejecuta una orden usando el strategy inyectado (DIP)."""
+        try:
+            result = await self._executor.execute_market(
+                symbol=settings.TRADING_SYMBOL,
+                side=op.side,
+                quantity=op.quantity,
+                entry_price=op.entry_price if price == 0 else price,
+                stop_loss=op.stop_loss,
+            )
+            return self._build_order_event(op, result)
+        except Exception as exc:
+            log.error("Order execution failed: %s", exc)
+            return None
 
     async def _execute_initial_orders(self) -> None:
         """Ejecuta las órdenes iniciales OC(a) y OV(p)."""
         for op in self._operations:
-            if settings.TRADING_MODE == "PAPER":
-                order_event = OrderExecutedEvent(
-                    order_id=op.order_id,
-                    symbol=settings.TRADING_SYMBOL,
-                    side=op.side,
-                    quantity=op.quantity,
-                    price=op.entry_price,
-                    mode="PAPER",
-                    entry_price=op.entry_price,
-                    stop_loss=op.stop_loss,
-                    trading_type=settings.TRADING_TYPE,
-                    leverage=settings.LEVERAGE,
-                    order_type="MARKET",
-                    timestamp=time.time(),
-                )
-                log.info("[PAPER] Initial order %s: %s %.6f @ %.4f",
-                         op.order_id, op.side, op.quantity, op.entry_price)
+            order_event = await self._execute_order(op)
+            if order_event:
                 event_bus.publish(order_event)
                 db_queue.enqueue_order(order_event)
 
                 event_bus.publish(InitialOrderEvent(
-                    order_id=op.order_id,
+                    order_id=order_event.order_id,
                     side=op.side,
                     quantity=op.quantity,
-                    price=op.entry_price,
+                    price=order_event.price,
                 ))
-            else:
-                await self._execute_live_initial(op)
 
-    async def _execute_live_initial(self, op: TradingOperation) -> None:
-        """Ejecuta una orden real inicial en Binance."""
-        from services.binance_client import create_client, execute_order
+    async def _close_open_positions(self) -> None:
+        """Cierra todas las posiciones abiertas al detener el bot."""
+        for op in self._operations:
+            if op.state != "ACTIVE":
+                continue
 
-        try:
-            if not self._client:
-                self._client = await create_client()
+            log.info("Closing position: %s %s", op.side, op.order_id)
 
-            if settings.TRADING_TYPE in ("FUTURES", "MARGIN") and not self._leverage_set:
-                await self._set_leverage()
-
-            order_params = {
-                "symbol": settings.TRADING_SYMBOL,
-                "side": op.side,
-                "type": "MARKET",
-                "quantity": op.quantity,
-            }
-
-            response = await execute_order(self._client, **order_params)
-
-            fill_price = float(response.get("fills", [{}])[0].get("price", op.entry_price))
-
-            order_event = OrderExecutedEvent(
-                order_id=response.get("orderId", op.order_id),
-                symbol=settings.TRADING_SYMBOL,
-                side=op.side,
-                quantity=op.quantity,
-                price=fill_price,
-                mode="LIVE",
+            # Lado opuesto para cerrar
+            close_side = "SELL" if op.side == "BUY" else "BUY"
+            close_op = TradingOperation(
+                side=close_side,
+                state="ACTIVE",
                 entry_price=op.entry_price,
                 stop_loss=op.stop_loss,
-                trading_type=settings.TRADING_TYPE,
-                leverage=settings.LEVERAGE,
-                order_type="MARKET",
-                timestamp=time.time(),
-            )
-            event_bus.publish(order_event)
-            db_queue.enqueue_order(order_event)
-
-        except Exception as exc:
-            log.error("Live initial order failed: %s", exc)
-
-    async def _execute_live_sl(
-        self, op: TradingOperation, trigger_price: float, order_id: str
-    ) -> OrderExecutedEvent | None:
-        """Ejecuta una orden de stop loss real en Binance."""
-        from services.binance_client import create_client, execute_order
-
-        try:
-            if not self._client:
-                self._client = await create_client()
-
-            order_params = {
-                "symbol": settings.TRADING_SYMBOL,
-                "side": op.side,
-                "type": "MARKET",
-                "quantity": op.quantity,
-            }
-
-            response = await execute_order(self._client, **order_params)
-
-            fill_price = float(response.get("fills", [{}])[0].get("price", trigger_price))
-
-            return OrderExecutedEvent(
-                order_id=response.get("orderId", order_id),
-                symbol=settings.TRADING_SYMBOL,
-                side=op.side,
                 quantity=op.quantity,
-                price=fill_price,
-                mode="LIVE",
-                entry_price=op.entry_price,
-                stop_loss=op.stop_loss,
-                trading_type=settings.TRADING_TYPE,
-                leverage=settings.LEVERAGE,
-                order_type="MARKET",
-                timestamp=time.time(),
+                order_id=f"CLOSE-{op.order_id}",
             )
 
-        except Exception as exc:
-            log.error("Live SL order failed: %s", exc)
-            return None
+            order_event = await self._execute_order(close_op, self._current_price)
+            if order_event:
+                event_bus.publish(order_event)
+                db_queue.enqueue_order(order_event)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -743,32 +684,6 @@ class BotEngine:
             timeframe_total=self._timeframe_duration,
             timestamp=time.time(),
         ))
-
-    async def _set_leverage(self) -> None:
-        """Configura el leverage para Futures/Margin."""
-        try:
-            if settings.TRADING_TYPE == "FUTURES":
-                await self._client.futures_change_leverage(
-                    symbol=settings.TRADING_SYMBOL,
-                    leverage=settings.LEVERAGE,
-                )
-            elif settings.TRADING_TYPE == "MARGIN":
-                await self._client.change_margin(
-                    symbol=settings.TRADING_SYMBOL,
-                    leverage=settings.LEVERAGE,
-                )
-            self._leverage_set = True
-            log.info("Leverage set to %dx for %s", settings.LEVERAGE, settings.TRADING_TYPE)
-        except Exception as exc:
-            log.error("Failed to set leverage: %s", exc)
-
-    async def _close_client(self) -> None:
-        if self._client:
-            try:
-                await self._client.close_connection()
-            except Exception:
-                pass
-            self._client = None
 
 
 # Instancia global singleton

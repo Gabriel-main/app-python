@@ -220,7 +220,6 @@ class SettingsView(ft.Column):
     # Build form data
     # ------------------------------------------------------------------
     def _build_form_data(self) -> SettingsFormData:
-        api_key, api_secret = self._mode_section.get_api_keys()
         return SettingsFormData(
             symbol=self._params_section.get_symbol(),
             mode=self._mode_section.get_mode(),
@@ -228,8 +227,6 @@ class SettingsView(ft.Column):
             leverage=self._type_section.get_leverage(),
             order_type=self._type_section.get_order_type(),
             limit_price=self._type_section.get_limit_price(),
-            api_key=api_key,
-            api_secret=api_secret,
             amount=self._params_section.get_amount(),
             currency=self._params_section.get_currency(),
             sl=self._params_section.get_sl(),
@@ -237,12 +234,6 @@ class SettingsView(ft.Column):
             timeframe=self._params_section.get_timeframe(),
             tf_unit=self._params_section.get_tf_unit(),
         )
-
-    def _build_env_snapshot(self) -> dict:
-        return {
-            "BINANCE_API_KEY": settings.BINANCE_API_KEY,
-            "BINANCE_API_SECRET": settings.BINANCE_API_SECRET,
-        }
 
     def _update_settings_from_form(self, form: SettingsFormData) -> None:
         settings.reload_from_env()
@@ -301,11 +292,9 @@ class SettingsView(ft.Column):
             self._confirm_dialog.update()
 
         form = self._build_form_data()
-        env_snapshot = self._build_env_snapshot()
         form_snapshot = vars(form)
 
         try:
-            self._persistence.save_sensitive(form.api_key, form.api_secret)
             await self._save_config_to_db(form)
             self._update_settings_from_form(form)
 
@@ -329,7 +318,6 @@ class SettingsView(ft.Column):
             event_bus.publish(NavigateToEvent(index=0))
 
         except Exception as exc:
-            self._persistence.rollback(env_snapshot)
             settings.reload_from_env()
             self._restore_form_fields(form_snapshot)
             self._feedback_text.value = f"❌ Error: {exc}. Cambios revertidos."

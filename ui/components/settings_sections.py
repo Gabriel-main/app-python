@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import flet as ft
 
 from config.settings import settings
+from ui.components.api_key_manager import ApiKeyManager
 from ui.components.symbol_picker import SymbolPicker
 
 
@@ -104,8 +105,6 @@ class SettingsFormData:
     leverage: int
     order_type: str
     limit_price: float
-    api_key: str
-    api_secret: str
     amount: float
     currency: str
     sl: float
@@ -154,9 +153,12 @@ def _textfield(
     prefix_icon: str | None = None,
     keyboard_type=None,
     password: bool = False,
+    reveal_password: bool = True,
     expand: bool = False,
     width: int | None = None,
     visible: bool = True,
+    disabled: bool = False,
+    read_only: bool = False,
     on_change=None,
 ) -> ft.TextField:
     kwargs = dict(
@@ -167,6 +169,8 @@ def _textfield(
         expand=expand,
         width=width,
         visible=visible,
+        disabled=disabled,
+        read_only=read_only,
         on_change=on_change,
         **_FIELD_STYLE,
     )
@@ -176,7 +180,7 @@ def _textfield(
         kwargs["keyboard_type"] = keyboard_type
     if password:
         kwargs["password"] = True
-        kwargs["can_reveal_password"] = True
+        kwargs["can_reveal_password"] = reveal_password
     return ft.TextField(**kwargs)
 
 
@@ -184,7 +188,7 @@ def _textfield(
 # Section: Trading Mode
 # ---------------------------------------------------------------------------
 class TradingModeSection(ft.Container):
-    """Sección: Modo de operación + API Keys + warning."""
+    """Sección: Modo de operación + API Keys (solo lectura) + warning."""
 
     def __init__(self, on_change=None) -> None:
         super().__init__()
@@ -203,23 +207,30 @@ class TradingModeSection(ft.Container):
 
         self._api_key_field = _textfield(
             label="Binance API Key",
-            value=settings.BINANCE_API_KEY,
+            value=ApiKeyManager.mask_key(settings.BINANCE_API_KEY),
             focused_color=ft.Colors.AMBER_400,
             password=True,
+            reveal_password=False,
             prefix_icon=ft.Icons.KEY,
             visible=settings.TRADING_MODE == "LIVE",
-            on_change=self._notify_change,
+            disabled=True,
+            read_only=True,
         )
 
         self._api_secret_field = _textfield(
             label="Binance API Secret",
-            value=settings.BINANCE_API_SECRET,
+            value=ApiKeyManager.mask_key(settings.BINANCE_API_SECRET),
             focused_color=ft.Colors.AMBER_400,
             password=True,
+            reveal_password=False,
             prefix_icon=ft.Icons.LOCK,
             visible=settings.TRADING_MODE == "LIVE",
-            on_change=self._notify_change,
+            disabled=True,
+            read_only=True,
         )
+
+        self._api_info_text = ApiKeyManager.get_info_text()
+        self._api_info_text.visible = settings.TRADING_MODE == "LIVE"
 
         self._live_warning = ft.Container(
             content=ft.Row(
@@ -250,6 +261,7 @@ class TradingModeSection(ft.Container):
                 self._live_warning,
                 self._api_key_field,
                 self._api_secret_field,
+                self._api_info_text,
             ],
             spacing=12,
         )
@@ -258,10 +270,12 @@ class TradingModeSection(ft.Container):
         is_live = e.control.value == "LIVE"
         self._api_key_field.visible = is_live
         self._api_secret_field.visible = is_live
+        self._api_info_text.visible = is_live
         self._live_warning.visible = is_live
         try:
             self._api_key_field.update()
             self._api_secret_field.update()
+            self._api_info_text.update()
             self._live_warning.update()
         except RuntimeError:
             pass
@@ -274,16 +288,12 @@ class TradingModeSection(ft.Container):
     def get_mode(self) -> str:
         return self._mode_dropdown.value or "PAPER"
 
-    def get_api_keys(self) -> tuple[str, str]:
-        return (self._api_key_field.value or "", self._api_secret_field.value or "")
-
     def restore(self, form_snapshot: dict) -> None:
         self._mode_dropdown.value = form_snapshot["mode"]
-        self._api_key_field.value = form_snapshot["api_key"]
-        self._api_secret_field.value = form_snapshot["api_secret"]
         is_live = form_snapshot["mode"] == "LIVE"
         self._api_key_field.visible = is_live
         self._api_secret_field.visible = is_live
+        self._api_info_text.visible = is_live
         self._live_warning.visible = is_live
 
     def set_disabled(self, disabled: bool) -> None:
@@ -298,8 +308,6 @@ class TradingModeSection(ft.Container):
         """Re-sincroniza widgets desde el settings singleton."""
         self.restore({
             "mode": settings.TRADING_MODE,
-            "api_key": settings.BINANCE_API_KEY,
-            "api_secret": settings.BINANCE_API_SECRET,
         })
         try:
             self.update()

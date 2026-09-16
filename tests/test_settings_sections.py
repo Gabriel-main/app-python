@@ -17,7 +17,7 @@ def test_settings_form_data_creation():
     form = SettingsFormData(
         symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
         leverage=1, order_type="MARKET", limit_price=0.0,
-        api_key="", api_secret="", amount=10.0, currency="USDT",
+        amount=10.0, currency="USDT",
         sl=1.01, sl_type="PERCENT", timeframe=1, tf_unit="MINUTES",
     )
     assert form.symbol == "BTCUSDT"
@@ -29,7 +29,7 @@ def test_settings_form_data_immutable():
     form = SettingsFormData(
         symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
         leverage=1, order_type="MARKET", limit_price=0.0,
-        api_key="", api_secret="", amount=10.0, currency="USDT",
+        amount=10.0, currency="USDT",
         sl=1.01, sl_type="PERCENT", timeframe=1, tf_unit="MINUTES",
     )
     try:
@@ -42,13 +42,6 @@ def test_settings_form_data_immutable():
 def test_mode_section_initial():
     section = TradingModeSection()
     assert section.get_mode() == "PAPER"
-
-
-def test_mode_section_get_api_keys():
-    section = TradingModeSection()
-    key, secret = section.get_api_keys()
-    assert isinstance(key, str)
-    assert isinstance(secret, str)
 
 
 def test_type_section_initial():
@@ -93,7 +86,7 @@ def test_confirm_dialog_builds_changes():
         form = SettingsFormData(
             symbol="ETHUSDT", mode="LIVE", trading_type="FUTURES",
             leverage=5, order_type="LIMIT", limit_price=3500.0,
-            api_key="key", api_secret="secret", amount=50.0, currency="USDC",
+            amount=50.0, currency="USDC",
             sl=1.05, sl_type="USDT", timeframe=5, tf_unit="HOURS",
         )
         changes = ConfirmDialogHelper.build_changes_summary(form)
@@ -120,7 +113,7 @@ def test_confirm_dialog_empty_changes():
         form = SettingsFormData(
             symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
             leverage=1, order_type="MARKET", limit_price=0.0,
-            api_key="", api_secret="", amount=10.0, currency="USDT",
+            amount=10.0, currency="USDT",
             sl=1.01, sl_type="PERCENT", timeframe=1, tf_unit="MINUTES",
         )
         changes = ConfirmDialogHelper.build_changes_summary(form)
@@ -130,12 +123,9 @@ def test_confirm_dialog_empty_changes():
 
 def test_mode_section_restore():
     section = TradingModeSection()
-    snapshot = {"mode": "LIVE", "api_key": "key123", "api_secret": "sec456"}
+    snapshot = {"mode": "LIVE"}
     section.restore(snapshot)
     assert section.get_mode() == "LIVE"
-    key, secret = section.get_api_keys()
-    assert key == "key123"
-    assert secret == "sec456"
 
 
 def test_type_section_restore():
