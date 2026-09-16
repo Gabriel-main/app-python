@@ -249,13 +249,20 @@ class BotEngine:
             if op.state != "ACTIVE":
                 continue
 
-            # Calcular PnL no realizado
+            # Calcular PnL no realizado con nueva fórmula
             if op.side == "BUY":
-                unrealized_pnl = (current_price - op.entry_price) * op.quantity
                 side = "LONG"
             else:
-                unrealized_pnl = (op.entry_price - current_price) * op.quantity
                 side = "SHORT"
+
+            if op.stop_loss > 0 and op.entry_price > 0:
+                pct = ((op.entry_price - op.stop_loss) / op.entry_price) * 100
+                if op.side == "BUY":
+                    unrealized_pnl = settings.TRADE_AMOUNT * (1 - pct / 100) - settings.TRADE_AMOUNT
+                else:
+                    unrealized_pnl = settings.TRADE_AMOUNT * (1 + pct / 100) - settings.TRADE_AMOUNT
+            else:
+                unrealized_pnl = 0.0
 
             event_bus.publish(PositionUpdateEvent(
                 symbol=settings.TRADING_SYMBOL,
@@ -579,6 +586,7 @@ class BotEngine:
                 price=trigger_price,
                 mode="PAPER",
                 entry_price=op.entry_price,
+                stop_loss=op.stop_loss,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",
@@ -621,6 +629,7 @@ class BotEngine:
                     price=op.entry_price,
                     mode="PAPER",
                     entry_price=op.entry_price,
+                    stop_loss=op.stop_loss,
                     trading_type=settings.TRADING_TYPE,
                     leverage=settings.LEVERAGE,
                     order_type="MARKET",
@@ -670,6 +679,7 @@ class BotEngine:
                 price=fill_price,
                 mode="LIVE",
                 entry_price=op.entry_price,
+                stop_loss=op.stop_loss,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",
@@ -710,6 +720,7 @@ class BotEngine:
                 price=fill_price,
                 mode="LIVE",
                 entry_price=op.entry_price,
+                stop_loss=op.stop_loss,
                 trading_type=settings.TRADING_TYPE,
                 leverage=settings.LEVERAGE,
                 order_type="MARKET",

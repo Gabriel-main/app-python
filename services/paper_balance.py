@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BalanceUpdateEvent, OrderExecutedEvent
 
@@ -36,6 +37,8 @@ class _OpenPosition:
     side: str            # "BUY" | "SELL"
     entry_price: float
     quantity: float
+    stop_loss: float = 0.0    # Precio de stop loss (PSL)
+    capital: float = 0.0      # Capital invertido en la operación
 
 
 # ---------------------------------------------------------------------------
@@ -95,30 +98,45 @@ class PaperBalanceService:
 
     def _handle_buy(self, event: OrderExecutedEvent) -> None:
         """BUY: debitar costo de la posición y abrir tracking."""
-        cost = event.quantity * event.price
-        self._free -= cost
-        self._locked += cost
+        capital = settings.TRADE_AMOUNT  # Capital invertido
+        self._free -= capital
+        self._locked += capital
 
         self._positions[event.order_id] = _OpenPosition(
             side="BUY",
             entry_price=event.entry_price,
             quantity=event.quantity,
+            stop_loss=event.stop_loss,
+            capital=capital,
         )
         log.debug(
-            "PAPER BUY: cost=%.4f, free=%.2f, locked=%.2f",
-            cost, self._free, self._locked,
+            "PAPER BUY: capital=%.4f, free=%.2f, locked=%.2f",
+            capital, self._free, self._locked,
         )
 
     def _handle_sell(self, event: OrderExecutedEvent) -> None:
-        """SELL: cerrar posición, calcular PnL, acreditar."""
+        """SELL: cerrar posición, calcular PnL con nueva fórmula, acreditar."""
         position = self._positions.pop(event.order_id, None)
 
         if position:
-            # Cerrar posición existente: calcular PnL
-            pnl = (event.price - position.entry_price) * position.quantity
-            cost = position.quantity * position.entry_price
-            self._locked -= cost
-            self._free += cost + pnl
+            # Nueva fórmula: ((Pi - SL) / Pi) × 100
+            pi = position.entry_price
+            sl = position.stop_loss
+            capital = position.capital
+            
+            if pi > 0 and sl > 0:
+                pct = ((pi - sl) / pi) * 100
+                if position.side == "BUY":
+                    resultado = capital * (1 - pct / 100)
+                else:
+                    resultado = capital * (1 + pct / 100)
+                pnl = resultado - capital
+            else:
+                resultado = capital
+                pnl = 0.0
+            
+            self._locked -= capital
+            self._free += resultado
             log.debug(
                 "PAPER SELL (closed): pnl=%.4f, free=%.2f",
                 pnl, self._free,

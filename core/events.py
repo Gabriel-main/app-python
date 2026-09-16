@@ -63,6 +63,7 @@ class OrderExecutedEvent:
     price: float
     mode: Literal["PAPER", "LIVE"]
     entry_price: float = 0.0        # Precio teórico de entrada (Pe) para PnL
+    stop_loss: float = 0.0          # Precio de stop loss (PSL) para cálculo de PnL
     trading_type: Literal["SPOT", "FUTURES", "MARGIN"] = "SPOT"
     leverage: int = 1
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
