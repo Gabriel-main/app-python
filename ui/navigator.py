@@ -4,10 +4,13 @@ Navigator — Navegación entre vistas.
 SRP: Solo maneja la navegación entre vistas.
 DIP: Depende de ft.AnimatedSwitcher (abstracción Flet).
 DRY: Una sola función navigate_to() para cualquier transición.
+PERFORMANCE: Usa update_batcher para un solo render.
 """
 from __future__ import annotations
 
 import flet as ft
+
+from core.update_batcher import update_batcher
 
 
 class Navigator:
@@ -41,7 +44,7 @@ class Navigator:
         self._current_index = index
         self._switcher.duration = 500 if animate else 0
         self._switcher.content = view
-        self._switcher.update()
+        update_batcher.mark_dirty(self._switcher)
 
     def reset(self) -> None:
         """Resetea el índice (útil para logout)."""

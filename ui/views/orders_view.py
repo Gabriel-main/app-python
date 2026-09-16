@@ -1,8 +1,9 @@
 """
 Orders View — Lista de órdenes ejecutadas.
 
-Refactorizado para aplicar DIP:
-- Usa OrderRepository en vez de acceder a DB directamente
+Refactorizado para aplicar:
+- DIP: Usa OrderRepository en vez de acceder a DB directamente
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import OrderExecutedEvent
+from core.update_batcher import update_batcher
 from ui.components.order_card import OrderCard
 
 
@@ -112,12 +114,9 @@ class OrdersView(ft.Column):
 
         # Ocultar loading
         self._loading_ring.visible = False
-        try:
-            self._loading_ring.update()
-            self._list_column.update()
-            self._order_count_text.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._loading_ring)
+        update_batcher.mark_dirty(self._list_column)
+        update_batcher.mark_dirty(self._order_count_text)
 
     # ------------------------------------------------------------------
     # Actualización reactiva
@@ -146,8 +145,5 @@ class OrdersView(ft.Column):
         count = len(self._list_column.controls)
         self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
 
-        try:
-            self._list_column.update()
-            self._order_count_text.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._list_column)
+        update_batcher.mark_dirty(self._order_count_text)

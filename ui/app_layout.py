@@ -28,6 +28,7 @@ from config.settings import settings
 from core.event_bus import event_bus
 from core.events import AuthStateChangedEvent, NavigateToEvent
 from core.logger import setup_logging
+from core.update_batcher import update_batcher
 from database.connection import create_db_and_tables
 from database.db_queue import db_queue
 from services.auth_service import auth_service
@@ -140,7 +141,7 @@ async def main(page: ft.Page) -> None:
     def _update_nav_bar(visible: bool) -> None:
         """Actualiza visibilidad de la barra de navegación."""
         nav_bar.visible = visible
-        nav_bar.update()
+        update_batcher.mark_dirty(nav_bar)
 
     # ------------------------------------------------------------------
     # Layout principal
@@ -194,7 +195,7 @@ async def main(page: ft.Page) -> None:
     def _clear_overlay() -> None:
         """Limpia diálogos del overlay después de logout."""
         page.overlay.clear()
-        page.update()
+        update_batcher.mark_dirty(page)
 
     async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
         if e.is_authenticated:

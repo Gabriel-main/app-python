@@ -3,7 +3,7 @@ BotStatusBar — Barra de estado del bot con señal actual y valores de MA.
 
 Refactorizado para aplicar:
 - SRP: Usa SIGNAL_COLORS de colors.py
-- Performance: Agrupa updates en un solo self.content.update()
+- PERFORMANCE: Agrupa updates en un solo batch via update_batcher
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import BotSignalEvent, BotStateChangedEvent
+from core.update_batcher import update_batcher
 from ui.components.colors import SIGNAL_COLORS
 
 
@@ -118,11 +119,7 @@ class BotStatusBar(ft.Container):
         self._confidence_bar.value = event.confidence
         self._confidence_bar.color = fg
 
-        # Update agrupado — un solo render
-        try:
-            self.content.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self.content)
 
     async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
         if event.is_running:
@@ -134,7 +131,4 @@ class BotStatusBar(ft.Container):
             self._bot_label.value = "BOT PAUSADO"
             self._bot_label.color = ft.Colors.GREY_600
 
-        try:
-            self.content.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self.content)

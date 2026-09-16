@@ -82,6 +82,11 @@ class TradingOperation:
 class BotEngine:
     """Motor de trading con modelo dual OC/OV."""
 
+    # Throttle: mínimo intervalo entre position updates (segundos)
+    _POSITION_UPDATE_MIN_INTERVAL: float = 2.0
+    # Throttle: delta mínimo de PnL para forzar update
+    _POSITION_PNL_DELTA_THRESHOLD: float = 0.001  # 0.1%
+
     def __init__(self, executor: OrderExecutor | None = None) -> None:
         self._running: bool = False
         self._active: bool = False
@@ -99,6 +104,13 @@ class BotEngine:
         self._timeframe_task: asyncio.Task | None = None
         self._timeframe_start: float = 0.0
         self._timeframe_duration: float = 0.0  # segundos
+
+        # Throttle de position updates
+        self._last_position_update_time: float = 0.0
+        self._last_position_pnl: float = 0.0
+
+        # Tracking de tareas de stop loss (para cleanup al detener)
+        self._sl_tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
     # Consulta de estado
@@ -138,6 +150,12 @@ class BotEngine:
         self._active = False
         self._stop_timeframe_timer()
         self._operations.clear()
+
+        # Cancelar tareas de SL pendientes
+        for task in self._sl_tasks:
+            task.cancel()
+        self._sl_tasks.clear()
+
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
@@ -244,7 +262,32 @@ class BotEngine:
         ))
 
     def _publish_position_updates(self, current_price: float) -> None:
-        """Publica PositionUpdateEvent para cada operación activa."""
+        """Publica PositionUpdateEvent para cada operación activa con throttle."""
+        now = time.time()
+        elapsed = now - self._last_position_update_time
+
+        # Calcular PnL total actual
+        total_pnl = 0.0
+        for op in self._operations:
+            if op.state == "ACTIVE":
+                pnl = PnLCalculator.calc_unrealized_pnl(
+                    capital=settings.TRADE_AMOUNT,
+                    entry_price=op.entry_price,
+                    stop_loss=op.stop_loss,
+                    side=op.side,
+                )
+                total_pnl += pnl
+
+        # Throttle: solo publicar si pasó el intervalo mínimo O el PnL cambió significativamente
+        pnl_delta = abs(total_pnl - self._last_position_pnl)
+        pnl_threshold = abs(self._last_position_pnl) * self._POSITION_PNL_DELTA_THRESHOLD
+
+        if elapsed < self._POSITION_UPDATE_MIN_INTERVAL and pnl_delta < pnl_threshold:
+            return
+
+        self._last_position_update_time = now
+        self._last_position_pnl = total_pnl
+
         for op in self._operations:
             if op.state != "ACTIVE":
                 continue
@@ -568,10 +611,12 @@ class BotEngine:
             if triggered:
                 log.info("STOP LOSS triggered: %s @ %.4f (SL=%.4f)",
                          op.side, price, op.stop_loss)
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._execute_stop_loss(op, price),
                     name=f"sl_{op.side}_{int(time.time())}",
                 )
+                self._sl_tasks.add(task)
+                task.add_done_callback(self._sl_tasks.discard)
 
     async def _execute_stop_loss(self, op: TradingOperation, trigger_price: float) -> None:
         """Ejecuta la orden de stop loss."""

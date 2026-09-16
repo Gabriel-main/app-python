@@ -4,6 +4,7 @@ PriceTicker — Widget reactivo de precio en tiempo real.
 Refactorizado para aplicar:
 - DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
 - SRP: Solo maneja visualización de precio
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import logging
 
 import flet as ft
 from core.events import PriceTickEvent, SettingsUpdatedEvent
+from core.update_batcher import update_batcher
 from ui.components.base import SymbolAwareSubscriber
 
 log = logging.getLogger(__name__)
@@ -74,10 +76,7 @@ class PriceTicker(ft.Column, SymbolAwareSubscriber):
         self._symbol_label.value = symbol
         self._last_price = 0.0
         self._price_text.value = "---"
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     # ------------------------------------------------------------------
     # Responsive
@@ -90,10 +89,7 @@ class PriceTicker(ft.Column, SymbolAwareSubscriber):
             weight=ft.FontWeight.BOLD,
             color=self._price_text.color,
         )
-        try:
-            self._price_text.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._price_text)
 
     # ------------------------------------------------------------------
     # Handlers
@@ -115,11 +111,9 @@ class PriceTicker(ft.Column, SymbolAwareSubscriber):
         self._change_badge.content.value = f"{sign}{event.change_pct:.2f}%"
         self._change_badge.bgcolor = change_color
 
-        try:
-            self._price_text.update()
-            self._change_badge.update()
-        except RuntimeError:
-            pass
+        # Batch update: un solo render para precio + badge
+        update_batcher.mark_dirty(self._price_text)
+        update_batcher.mark_dirty(self._change_badge)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         self.sync_symbol()

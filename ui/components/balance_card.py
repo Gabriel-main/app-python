@@ -6,6 +6,8 @@ Refactorizado para aplicar:
 - OCP: Usa BalanceDisplayStrategy para formatos por trading type
 - SRP: Solo maneja lógica de balance y formato
 - LSP: No manipula DOM interno de StatCard (usa header_extras)
+- PERFORMANCE: Elimina double update en _on_balance_update
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BalanceUpdateEvent, SettingsUpdatedEvent
+from core.update_batcher import update_batcher
 from ui.components.balance_display import (
     get_strategy,
     format_amount,
@@ -91,15 +94,11 @@ class BalanceCard(StatCard):
         self._teardown_subscriptions()
 
     def _sync_from_settings(self) -> None:
-        """Re-sincroniza strategy y badge desde settings."""
+        """Re-sincroniza strategy y badge desde settings. NO ejecuta update()."""
         self._strategy = get_strategy(settings.TRADING_TYPE)
         type_info = TRADING_TYPE_COLORS.get(settings.TRADING_TYPE, TRADING_TYPE_COLORS["SPOT"])
         self._type_badge.update_label(type_info[2], fg_color=type_info[0], bg_color=type_info[1])
         self._apply_labels()
-        try:
-            self.update()
-        except RuntimeError:
-            pass
 
     def _apply_labels(self) -> None:
         """Aplica los labels de la estrategia actual."""
@@ -113,7 +112,7 @@ class BalanceCard(StatCard):
         self._value_3.visible = False
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
-        """Actualiza valores con datos reales del balance."""
+        """Actualiza valores con datos reales del balance. Un solo render."""
         self._sync_from_settings()
 
         self._last_update = event.timestamp
@@ -134,20 +133,16 @@ class BalanceCard(StatCard):
             self._value_3.visible = False
 
         self._update_timestamp()
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+
+        # Un solo render para todo el card
+        update_batcher.mark_dirty(self)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Actualiza badge, labels y muestra indicador de carga."""
         self._sync_from_settings()
         self._loading.visible = True
         self._time_text.value = f"Cargando saldo de {event.trading_type}..."
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     def _update_timestamp(self) -> None:
         elapsed = time.time() - self._last_update

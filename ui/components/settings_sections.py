@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import flet as ft
 
 from config.settings import settings
+from core.update_batcher import update_batcher
 from ui.components.api_key_manager import ApiKeyManager
 from ui.components.symbol_picker import SymbolPicker
 
@@ -87,10 +88,7 @@ class SymbolValidationIndicator(ft.Row):
             self.visible = True
         else:
             self.visible = False
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
 
 # ---------------------------------------------------------------------------
@@ -272,13 +270,10 @@ class TradingModeSection(ft.Container):
         self._api_secret_field.visible = is_live
         self._api_info_text.visible = is_live
         self._live_warning.visible = is_live
-        try:
-            self._api_key_field.update()
-            self._api_secret_field.update()
-            self._api_info_text.update()
-            self._live_warning.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._api_key_field)
+        update_batcher.mark_dirty(self._api_secret_field)
+        update_batcher.mark_dirty(self._api_info_text)
+        update_batcher.mark_dirty(self._live_warning)
         self._notify_change()
 
     def _notify_change(self, *args) -> None:
@@ -299,20 +294,14 @@ class TradingModeSection(ft.Container):
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
         _set_fields_disabled(self, disabled)
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     def sync_from_settings(self) -> None:
         """Re-sincroniza widgets desde el settings singleton."""
         self.restore({
             "mode": settings.TRADING_MODE,
         })
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
 
 # ---------------------------------------------------------------------------
@@ -388,10 +377,7 @@ class TradingTypeSection(ft.Container):
     def _on_trading_type_changed(self, e: ft.ControlEvent) -> None:
         show_leverage = e.control.value in ("FUTURES", "MARGIN")
         self._leverage_dropdown.visible = show_leverage
-        try:
-            self._leverage_dropdown.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._leverage_dropdown)
         self._notify_change()
         if self._on_type_changed:
             self._on_type_changed(e.control.value)
@@ -399,10 +385,7 @@ class TradingTypeSection(ft.Container):
     def _on_order_type_changed(self, e: ft.ControlEvent) -> None:
         is_limit = e.control.value == "LIMIT"
         self._limit_price_field.visible = is_limit
-        try:
-            self._limit_price_field.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._limit_price_field)
         self._notify_change()
 
     def _notify_change(self, *args) -> None:
@@ -434,10 +417,7 @@ class TradingTypeSection(ft.Container):
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
         _set_fields_disabled(self, disabled)
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     def sync_from_settings(self) -> None:
         """Re-sincroniza widgets desde el settings singleton."""
@@ -447,10 +427,7 @@ class TradingTypeSection(ft.Container):
             "order_type": settings.ORDER_TYPE,
             "limit_price": settings.LIMIT_PRICE,
         })
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
 
 # ---------------------------------------------------------------------------
@@ -617,10 +594,7 @@ class OperationParamsSection(ft.Container):
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
         _set_fields_disabled(self, disabled)
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     def sync_from_settings(self) -> None:
         """Re-sincroniza widgets desde el settings singleton."""
@@ -633,10 +607,7 @@ class OperationParamsSection(ft.Container):
             "tf_unit": settings.TIMEFRAME_UNIT,
         })
         self._symbol_picker.set_symbol(settings.TRADING_SYMBOL)
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
 
 # ---------------------------------------------------------------------------
@@ -708,9 +679,9 @@ class ConfirmDialogHelper:
             inset_padding=ft.Padding.all(12),
         )
         page.overlay.append(dialog)
-        page.update()
+        update_batcher.mark_dirty(page)
         dialog.open = True
-        dialog.update()
+        update_batcher.mark_dirty(dialog)
         return dialog
 
     @staticmethod

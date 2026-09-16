@@ -103,6 +103,7 @@ def _format_position_data(event: PositionUpdateEvent) -> dict:
 HANDLER_REGISTRY: dict[type, HandlerConfig] = {
     PriceTickEvent: HandlerConfig(
         category="PRICE",
+        filter=lambda e: False,  # No auditar ticks individuales (demasiado frecuentes)
         action=lambda e: "TICK",
         detail=lambda e: f"{e.symbol} ${e.price:,.2f} ({e.change_pct:+.2f}%)",
         data=lambda e: {

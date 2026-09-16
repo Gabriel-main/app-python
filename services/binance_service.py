@@ -98,6 +98,14 @@ class BinanceService:
         self._balance_task: asyncio.Task | None = None
         self._balance_interval: float = 30.0  # segundos
 
+        # Cache de símbolos (por mercado + moneda)
+        self._symbols_cache: dict[str, list[dict]] = {}
+        self._symbols_cache_time: dict[str, float] = {}
+
+        # Cache de saldo
+        self._balance_cache: BalanceUpdateEvent | None = None
+        self._balance_cache_time: float = 0.0
+
     # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
@@ -368,9 +376,6 @@ class BinanceService:
     # Consulta de símbolos (USDT/USDC) con precios
     # ------------------------------------------------------------------
 
-    _symbols_cache: dict[str, list[dict]] = {}
-    _symbols_cache_time: dict[str, float] = {}
-
     def clear_symbols_cache(self) -> None:
         """Limpia el caché de símbolos para forzar recarga."""
         self._symbols_cache = {}
@@ -461,9 +466,6 @@ class BinanceService:
     # ------------------------------------------------------------------
     # Consulta de saldo (Account Balance)
     # ------------------------------------------------------------------
-
-    _balance_cache: BalanceUpdateEvent | None = None
-    _balance_cache_time: float = 0.0
 
     async def get_balance(self, asset: str = "USDT") -> BalanceUpdateEvent:
         """Consulta el saldo según TRADING_TYPE actual. Cache de 5 segundos."""

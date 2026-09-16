@@ -17,6 +17,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BotStateChangedEvent, NavigateToEvent, SettingsUpdatedEvent
+from core.update_batcher import update_batcher
 from services.settings_persistence import EnvSettingsPersistence
 from ui.components.settings_sections import (
     ConfirmDialogHelper,
@@ -144,10 +145,7 @@ class SettingsView(ft.Column):
         self._type_section.set_disabled(disabled)
         self._params_section.set_disabled(disabled)
         self._save_btn.disabled = disabled or not self._has_changes()
-        try:
-            self._save_btn.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._save_btn)
 
     # ------------------------------------------------------------------
     # Detección de cambios
@@ -174,10 +172,7 @@ class SettingsView(ft.Column):
             self._validation_indicator._icon.color == ft.Colors.GREEN_400
         )
         self._save_btn.disabled = not has_changes or not symbol_valid
-        try:
-            self._save_btn.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._save_btn)
 
     # ------------------------------------------------------------------
     # Validación de símbolo
@@ -325,10 +320,7 @@ class SettingsView(ft.Column):
 
         finally:
             ConfirmDialogHelper.close(self._confirm_dialog, self.page)
-            try:
-                self._feedback_text.update()
-            except RuntimeError:
-                pass
+            update_batcher.mark_dirty(self._feedback_text)
 
     async def _save_config_to_db(self, form: SettingsFormData) -> None:
         from services.config_service import config_service
@@ -372,18 +364,18 @@ class SettingsView(ft.Column):
         )
         if self._page:
             self._page.overlay.append(dialog)
-            self._page.update()
+            update_batcher.mark_dirty(self._page)
             dialog.open = True
-            dialog.update()
+            update_batcher.mark_dirty(dialog)
 
     def _close_warning_dialog(self, dialog: ft.AlertDialog) -> None:
         """Cierra el modal de advertencia."""
         if dialog:
             dialog.open = False
-            dialog.update()
+            update_batcher.mark_dirty(dialog)
             if self._page and dialog in self._page.overlay:
                 self._page.overlay.remove(dialog)
-                self._page.update()
+                update_batcher.mark_dirty(self._page)
 
     def refresh_symbols(self) -> None:
         self._params_section.refresh_symbols()

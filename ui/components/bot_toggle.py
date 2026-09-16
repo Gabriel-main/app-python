@@ -4,6 +4,9 @@ BotToggle — Botón ON/OFF del bot de trading.
 Extraído de DashboardView para aplicar SRP.
 Publica BotStateChangedEvent al hacer click.
 Suscribite a BotStateChangedEvent para sincronización bidireccional.
+
+Refactorizado para:
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import BotStateChangedEvent
+from core.update_batcher import update_batcher
 
 
 class BotToggle(ft.FilledButton):
@@ -71,10 +75,7 @@ class BotToggle(ft.FilledButton):
             self.content = "▶  Iniciar Operaciones"
             self.style.bgcolor = ft.Colors.GREEN_800
             self.icon = ft.Icons.PLAY_CIRCLE
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     # ------------------------------------------------------------------
     # Public API

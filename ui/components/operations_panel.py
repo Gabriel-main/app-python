@@ -1,9 +1,11 @@
 """
 OperationsPanel — Panel de operaciones dual (OC/OV).
 
-Refactorizado para aplicar DRY:
-- Usa SIDE_COLORS, STATE_COLORS, SIDE_LABELS de colors.py
-- Usa Badge para badges de lado y estado
+Refactorizado para aplicar:
+- DRY: Usa SIDE_COLORS, STATE_COLORS, SIDE_LABELS de colors.py
+- SRP: Solo maneja visualización de operaciones
+- PERFORMANCE: Diff incremental (no recrea widgets en cada tick)
+- PERFORMANCE: Usa update_batcher para un solo render por batch
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import OperationState, OperationUpdateEvent
+from core.update_batcher import update_batcher
 from ui.components.colors import SIDE_COLORS, SIDE_LABELS, STATE_COLORS
 from ui.components.badges import Badge
 
@@ -33,7 +36,7 @@ def _operation_card(op: OperationState) -> ft.Container:
         op.state, (ft.Colors.WHITE, ft.Colors.GREY_800, op.state)
     )
 
-    return ft.Container(
+    card = ft.Container(
         bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
         border_radius=10,
         padding=ft.Padding(left=12, right=12, top=10, bottom=10),
@@ -83,6 +86,9 @@ def _operation_card(op: OperationState) -> ft.Container:
             spacing=0,
         ),
     )
+    # Tag para identificar la tarjeta en el diff
+    card._op_order_id = op.order_id
+    return card
 
 
 class OperationsPanel(ft.Container):
@@ -159,20 +165,29 @@ class OperationsPanel(ft.Container):
         self._refresh_ui()
 
     def _refresh_ui(self) -> None:
-        """Redibuja el panel de operaciones."""
-        self._operations_column.controls.clear()
-
+        """Redibuja el panel de operaciones con diff incremental."""
         if not self._operations:
+            if self._operations_column.controls:
+                self._operations_column.controls.clear()
             self._empty_text.visible = True
             self._timer_text.value = ""
             self._timer_bar.value = 0.0
         else:
             self._empty_text.visible = False
 
-            for op in self._operations:
-                self._operations_column.controls.append(_operation_card(op))
+            # Diff incremental: solo recrear si cambiaron los order_ids
+            new_ids = {op.order_id for op in self._operations}
+            existing_ids = {
+                getattr(c, '_op_order_id', None) for c in self._operations_column.controls
+            }
 
-            # Timer
+            if new_ids != existing_ids:
+                # Reconstruir solo si hay diff real
+                self._operations_column.controls.clear()
+                for op in self._operations:
+                    self._operations_column.controls.append(_operation_card(op))
+
+            # Timer siempre se actualiza
             if self._timeframe_total > 0:
                 progress = self._timeframe_remaining / self._timeframe_total
                 self._timer_bar.value = progress
@@ -181,10 +196,8 @@ class OperationsPanel(ft.Container):
                 self._timer_text.value = ""
                 self._timer_bar.value = 0.0
 
-        try:
-            self._operations_column.update()
-            self._timer_text.update()
-            self._timer_bar.update()
-            self._empty_text.update()
-        except RuntimeError:
-            pass
+        # Batch update: un solo render
+        update_batcher.mark_dirty(self._operations_column)
+        update_batcher.mark_dirty(self._timer_text)
+        update_batcher.mark_dirty(self._timer_bar)
+        update_batcher.mark_dirty(self._empty_text)

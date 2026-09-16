@@ -5,7 +5,7 @@ Refactorizado para aplicar:
 - SRP: Solo muestra estado de conexión
 - DIP: Depende de eventos, no de BinanceService
 - DRY: _apply_status() unifica lógica de ambos handlers
-- Solicita estado actual al montar (ConnectionStatusRequestEvent)
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from core.events import (
     ConnectionStatusRequestEvent,
     ConnectionStatusSnapshotEvent,
 )
+from core.update_batcher import update_batcher
 from ui.components.colors import CONNECTION_COLORS
 
 
@@ -75,7 +76,4 @@ class ConnectionIndicator(ft.Row):
         self._label.value = text
         self._label.color = color
 
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)

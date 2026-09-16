@@ -6,9 +6,9 @@ Muestra en tiempo real qué está haciendo el bot:
 - Acciones tomadas (órdenes, stop losses)
 - Estado del sistema (conexión, configuración)
 
-Refactorizado para aplicar SRP + DIP:
-- Usa AuditService para obtener eventos
-- Lifecycle: suscribir en did_mount(), des-suscribir en will_unmount()
+Refactorizado para aplicar:
+- SRP + DIP: Usa AuditService para obtener eventos
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import AuditEvent
+from core.update_batcher import update_batcher
 from services.audit_service import audit_service
 from ui.components.audit_card import AuditCard
 
@@ -119,10 +120,7 @@ class AuditView(ft.Column):
             self._list_column.controls = self._list_column.controls[-200:]
 
         self._update_count()
-        try:
-            self._list_column.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._list_column)
 
     def _on_filter_changed(self, e: ft.ControlEvent) -> None:
         """Reconstruye la lista con el nuevo filtro."""
@@ -142,10 +140,7 @@ class AuditView(ft.Column):
             self._list_column.controls.append(AuditCard(event))
 
         self._update_count()
-        try:
-            self._list_column.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._list_column)
 
     def _update_count(self) -> None:
         count = len(self._list_column.controls)

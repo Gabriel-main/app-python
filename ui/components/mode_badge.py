@@ -3,11 +3,15 @@ ModeBadge — Badge de modo (PAPER/LIVE) con actualización encapsulada.
 
 Extraído de DashboardView para aplicar SRP + encapsulamiento.
 Reemplaza el acceso directo a content.value / content.color.
+
+Refactorizado para:
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
 import flet as ft
 
+from core.update_batcher import update_batcher
 from ui.components.colors import MODE_COLORS
 
 
@@ -40,10 +44,7 @@ class ModeBadge(ft.Container):
         self._text.color = color
         self.bgcolor = ft.Colors.with_opacity(0.15, color)
         self.border = ft.Border.all(1, color)
-        try:
-            self.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     @property
     def mode(self) -> str:

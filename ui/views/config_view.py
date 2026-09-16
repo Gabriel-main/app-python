@@ -10,6 +10,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import NavigateToEvent
+from core.update_batcher import update_batcher
 from services.auth_service import auth_service
 
 
@@ -162,9 +163,9 @@ class ConfigView(ft.Column):
         )
         if self._page:
             self._page.overlay.append(dialog)
-            self._page.update()
+            update_batcher.mark_dirty(self._page)
             dialog.open = True
-            dialog.update()
+            update_batcher.mark_dirty(dialog)
 
     def _confirm_logout(self, dialog: ft.AlertDialog) -> None:
         """Confirma el cierre de sesión."""
@@ -175,10 +176,10 @@ class ConfigView(ft.Column):
         """Cierra el diálogo."""
         if dialog:
             dialog.open = False
-            dialog.update()
+            update_batcher.mark_dirty(dialog)
             if self._page and dialog in self._page.overlay:
                 self._page.overlay.remove(dialog)
-                self._page.update()
+                update_batcher.mark_dirty(self._page)
 
     def did_mount(self) -> None:
         self._page = self.page

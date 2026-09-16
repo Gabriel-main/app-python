@@ -1,9 +1,11 @@
 """
 PositionsPanel — Panel de posiciones abiertas (Futures/Margin).
 
-Refactorizado para aplicar SRP + DRY:
-- Usa base mixin para lifecycle
-- Manejo seguro de RuntimeError en updates
+Refactorizado para aplicar:
+- SRP: Solo maneja visualización de posiciones
+- DRY: Usa base mixin para lifecycle
+- PERFORMANCE: Diff incremental (no recrea widgets en cada tick)
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import flet as ft
 
 from core.event_bus import event_bus
 from core.events import PositionUpdateEvent
+from core.update_batcher import update_batcher
 from ui.components.position_card import PositionCard
 
 
@@ -81,9 +84,10 @@ class PositionsPanel(ft.Container):
         self._refresh_ui()
 
     def _refresh_ui(self) -> None:
-        self._positions_column.controls.clear()
-
+        """Redibuja el panel con diff incremental."""
         if not self._positions:
+            if self._positions_column.controls:
+                self._positions_column.controls.clear()
             self._empty_text.visible = True
             self._total_pnl_text.value = "PnL Total: $0.00"
             self._total_pnl_text.color = ft.Colors.BLUE_GREY_400
@@ -91,8 +95,20 @@ class PositionsPanel(ft.Container):
             self._empty_text.visible = False
             total_pnl = 0.0
 
+            # Diff incremental: solo recrear si cambiaron las keys
+            new_keys = set(self._positions.keys())
+            existing_keys = {
+                getattr(c, '_pos_key', None) for c in self._positions_column.controls
+            }
+
+            if new_keys != existing_keys:
+                self._positions_column.controls.clear()
+                for pos in self._positions.values():
+                    card = PositionCard(pos)
+                    card._pos_key = f"{pos['symbol']}_{pos['side']}"
+                    self._positions_column.controls.append(card)
+
             for pos in self._positions.values():
-                self._positions_column.controls.append(PositionCard(pos))
                 total_pnl += pos.get("unrealized_pnl", 0)
 
             sign = "+" if total_pnl >= 0 else ""
@@ -103,10 +119,8 @@ class PositionsPanel(ft.Container):
         count = len(self._positions)
         self._count_text.value = f"{count} posición{'es' if count != 1 else ''}"
 
-        try:
-            self._positions_column.update()
-            self._count_text.update()
-            self._total_pnl_text.update()
-            self._empty_text.update()
-        except RuntimeError:
-            pass
+        # Batch update: un solo render
+        update_batcher.mark_dirty(self._positions_column)
+        update_batcher.mark_dirty(self._count_text)
+        update_batcher.mark_dirty(self._total_pnl_text)
+        update_batcher.mark_dirty(self._empty_text)

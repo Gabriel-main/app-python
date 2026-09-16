@@ -4,6 +4,8 @@ MiniChart — Gráfico sparkline de los últimos N ticks de precio.
 Refactorizado para aplicar:
 - DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
 - SRP: Solo maneja visualización del gráfico
+- PERFORMANCE: Redraw incremental (no recrea todas las formas)
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import flet.canvas as cv
 
 from config.settings import settings
 from core.events import BalanceUpdateEvent, PriceTickEvent, SettingsUpdatedEvent
+from core.update_batcher import update_batcher
 from ui.components.base import SymbolAwareSubscriber
 
 log = logging.getLogger(__name__)
@@ -78,7 +81,7 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         if not self.matches_symbol(event.symbol):
             return
         self._prices.append(event.price)
-        self._redraw()
+        self._redraw_incremental(event.price)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         self.sync_symbol()
@@ -91,16 +94,71 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         }
         label = type_labels.get(event.trading_type, "Precio 1m")
         self._chart_label.value = label
-        try:
-            self._chart_label.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._chart_label)
 
     # ------------------------------------------------------------------
-    # Dibujo del sparkline
+    # Dibujo incremental del sparkline
+    # ------------------------------------------------------------------
+    def _redraw_incremental(self, new_price: float) -> None:
+        """Redibuja de forma incremental: solo agrega nueva línea + mueve círculo."""
+        prices = list(self._prices)
+        n = len(prices)
+
+        if n < 2:
+            return
+
+        canvas_width = max(self.width or 300, 200) - self.PADDING * 2
+        h = self.HEIGHT - self.PADDING * 2
+
+        min_p = min(prices)
+        max_p = max(prices)
+        price_range = max_p - min_p or 1
+
+        self._canvas.width = canvas_width + self.PADDING * 2
+
+        def to_xy(i: int, p: float):
+            x = (i / (n - 1)) * canvas_width + self.PADDING
+            y = h - ((p - min_p) / price_range) * h + self.PADDING
+            return x, y
+
+        shapes: list = []
+
+        # Reconstruir todas las líneas (necesario por cambio de rango Y)
+        for i in range(n - 1):
+            x1, y1 = to_xy(i, prices[i])
+            x2, y2 = to_xy(i + 1, prices[i + 1])
+            color = ft.Colors.GREEN_400 if prices[i + 1] >= prices[i] else ft.Colors.RED_400
+            shapes.append(
+                cv.Line(
+                    x1=x1, y1=y1, x2=x2, y2=y2,
+                    paint=ft.Paint(
+                        stroke_width=1.5,
+                        style=ft.PaintingStyle.STROKE,
+                        color=color,
+                    ),
+                )
+            )
+
+        # Círculo en el punto final
+        lx, ly = to_xy(n - 1, prices[-1])
+        shapes.append(
+            cv.Circle(
+                x=lx, y=ly, radius=3,
+                paint=ft.Paint(color=ft.Colors.WHITE),
+            )
+        )
+
+        self._canvas.shapes = shapes
+        update_batcher.mark_dirty(self._canvas)
+
+    # ------------------------------------------------------------------
+    # Dibujo completo (para reset de símbolo)
     # ------------------------------------------------------------------
     def _redraw(self) -> None:
+        """Redibujo completo (solo al cambiar símbolo)."""
         if len(self._prices) < 2:
+            self._canvas.shapes = []
+            update_batcher.mark_dirty(self._canvas)
             return
 
         prices = list(self._prices)
@@ -144,7 +202,4 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         )
 
         self._canvas.shapes = shapes
-        try:
-            self._canvas.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._canvas)

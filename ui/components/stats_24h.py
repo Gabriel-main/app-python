@@ -4,6 +4,7 @@ Stats24H — Estadísticas 24h usando StatCard (DRY).
 Refactorizado para aplicar:
 - DRY: Usa SymbolAwareSubscriber para filtrado de símbolo
 - SRP: Solo maneja datos de stats 24h
+- PERFORMANCE: Usa update_batcher para un solo render
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import flet as ft
 
 from config.settings import settings
 from core.events import PriceTickEvent, SettingsUpdatedEvent
+from core.update_batcher import update_batcher
 from ui.components.stat_card import StatCard
 
 log = logging.getLogger(__name__)
@@ -71,12 +73,7 @@ class Stats24H(StatCard):
         self._vol_text.style = ft.TextStyle(
             size=size, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_300
         )
-        try:
-            self._high_text.update()
-            self._low_text.update()
-            self._vol_text.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self)
 
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
         if event.symbol != self._symbol:
@@ -87,12 +84,8 @@ class Stats24H(StatCard):
         vol_m = event.volume / 1_000_000
         self._vol_text.value = f"${vol_m:.1f}M"
 
-        try:
-            self._high_text.update()
-            self._low_text.update()
-            self._vol_text.update()
-        except RuntimeError:
-            pass
+        # Batch update: un solo render para los 3 textos
+        update_batcher.mark_dirty(self)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         self._sync_symbol()

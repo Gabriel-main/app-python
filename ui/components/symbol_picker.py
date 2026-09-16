@@ -18,6 +18,7 @@ import flet as ft
 from config.settings import settings
 from core.event_bus import event_bus
 from core.events import SymbolsListEvent
+from core.update_batcher import update_batcher
 
 log = logging.getLogger(__name__)
 
@@ -258,10 +259,7 @@ class SymbolPicker(ft.Container):
     # ------------------------------------------------------------------
     def _set_loading(self, visible: bool) -> None:
         self._loading_indicator.visible = visible
-        try:
-            self._loading_indicator.update()
-        except RuntimeError:
-            pass
+        update_batcher.mark_dirty(self._loading_indicator)
 
     def _close_overlay(self) -> None:
         self._is_open = False
@@ -286,7 +284,7 @@ class SymbolPicker(ft.Container):
         self._set_loading(False)
         self._sync_trigger_label()
         self._render_options()
-        self.update()
+        update_batcher.mark_dirty(self)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -337,6 +335,7 @@ class SymbolPicker(ft.Container):
             )
 
         self._options_column.update()
+        update_batcher.mark_dirty(self._counter_text)
 
     def _sync_trigger_label(self) -> None:
         """Sincroniza el label del trigger con la selección del manager."""
@@ -352,7 +351,7 @@ class SymbolPicker(ft.Container):
             self._search_field.value = ""
             self._mgr.set_search_query("")
             self._render_options()
-        self.update()
+        update_batcher.mark_dirty(self)
 
     def _on_search(self, e: ft.ControlEvent) -> None:
         self._mgr.set_search_query(e.control.value or "")
@@ -362,7 +361,7 @@ class SymbolPicker(ft.Container):
         if not self._is_open:
             self._is_open = True
             self._overlay.visible = True
-            self.update()
+            update_batcher.mark_dirty(self)
 
     def _on_option_click(self, e: ft.ControlEvent) -> None:
         symbol = e.control.data
@@ -373,7 +372,7 @@ class SymbolPicker(ft.Container):
             if self._on_symbol_changed:
                 self._on_symbol_changed(symbol)
         self._close_overlay()
-        self.update()
+        update_batcher.mark_dirty(self)
 
     # ------------------------------------------------------------------
     # API pública (misma interfaz que antes)
