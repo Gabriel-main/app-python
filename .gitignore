@@ -28,3 +28,4 @@ Thumbs.db
 # Project
 .agents/
 comandos.txt
+buildozer.spec

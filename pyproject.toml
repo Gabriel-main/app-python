@@ -1,0 +1,15 @@
+[project]
+name = "CryptoBot"
+version = "0.1.0"
+description = "Trading Bot - Binance API"
+requires-python = ">=3.11"
+dependencies = [
+    "flet>=0.86.5",
+    "python-binance>=1.0.37",
+    "aiosqlite>=0.21.0",
+    "sqlmodel>=0.0.42",
+    "python-dotenv>=1.2.3",
+]
+
+[tool.flet]
+app_module = "main"
