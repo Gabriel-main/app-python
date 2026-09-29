@@ -23,6 +23,37 @@ _LEVERAGE_STEPS: list[int] = [
     1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150,
 ]
 
+# Máximo de ítems visibles en el menú del dropdown antes de hacer scroll
+_LEVERAGE_VISIBLE: int = 5
+# Alto fijo de cada ítem (px) — hace determinista la cuenta de ítems visibles
+_LEVERAGE_ITEM_H: int = 44
+
+
+def _leverage_options(values: list[int]) -> list[ft.DropdownOption]:
+    """Construye las opciones del dropdown de leverage con alto fijo por ítem.
+
+    Conserva `text` (lo muestra el campo colapsado) y agrega `content`
+    con altura fija para que menu_height = N * _LEVERAGE_ITEM_H sea exacto.
+    """
+    return [
+        ft.DropdownOption(
+            key=str(v),
+            text=f"{v}x",
+            content=ft.Container(
+                content=ft.Text(f"{v}x"),
+                height=_LEVERAGE_ITEM_H,
+                alignment=ft.Alignment.CENTER_LEFT,
+                padding=ft.Padding.symmetric(vertical=0, horizontal=16),
+            ),
+        )
+        for v in values
+    ]
+
+
+def _leverage_menu_height(count: int) -> int:
+    """Alta del menú: muestra hasta _LEVERAGE_VISIBLE ítems y scrollea el resto."""
+    return min(count, _LEVERAGE_VISIBLE) * _LEVERAGE_ITEM_H
+
 
 # ---------------------------------------------------------------------------
 # Helper: Bloqueo de campos (DRY)
@@ -135,6 +166,7 @@ def _dropdown(
     on_select=None,
     width: int | None = None,
     visible: bool = True,
+    menu_height: int | None = None,
 ) -> ft.Dropdown:
     return ft.Dropdown(
         label=label,
@@ -144,6 +176,7 @@ def _dropdown(
         width=width,
         visible=visible,
         on_select=on_select,
+        menu_height=menu_height,
         **_FIELD_STYLE,
     )
 
@@ -332,16 +365,16 @@ class TradingTypeSection(ft.Container):
             on_select=self._on_trading_type_changed,
         )
 
-        leverage_options = [
-            ft.DropdownOption(key=str(i), text=f"{i}x")
-            for i in _LEVERAGE_STEPS if i <= 20  # default: hasta 20x (se amplía con set_max_leverage)
-        ]
+        leverage_options = _leverage_options(
+            [i for i in _LEVERAGE_STEPS if i <= 20]  # default hasta 20x (amplía set_max_leverage)
+        )
         self._leverage_dropdown = _dropdown(
             label="Leverage",
             value=str(settings.LEVERAGE),
             options=leverage_options,
             focused_color=ft.Colors.PURPLE_400,
             visible=settings.TRADING_TYPE in ("FUTURES", "MARGIN"),
+            menu_height=_leverage_menu_height(len(leverage_options)),
         )
         self._max_lev_label = ft.Text(
             "",
@@ -423,8 +456,9 @@ class TradingTypeSection(ft.Container):
         if not steps:
             steps = [1]
 
-        options = [ft.DropdownOption(key=str(i), text=f"{i}x") for i in steps]
+        options = _leverage_options(steps)
         self._leverage_dropdown.options = options
+        self._leverage_dropdown.menu_height = _leverage_menu_height(len(options))
 
         current = int(self._leverage_dropdown.value or "1")
         if current > max_leverage:

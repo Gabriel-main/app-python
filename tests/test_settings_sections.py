@@ -112,6 +112,44 @@ def test_set_max_leverage_label_hidden_spot():
     assert section._max_lev_label.visible is False
 
 
+# ---------------------------------------------------------------------------
+# Menú con 5 ítems visibles + scroll (menu_height)
+# ---------------------------------------------------------------------------
+def test_menu_height_initial_caps_at_visible():
+    """Init con 7 opciones (<=20x) → altura = 5 * 44 (muestra 5, scrollea)."""
+    section = TradingTypeSection()
+    assert len(section._leverage_dropdown.options) == 7
+    assert section._leverage_dropdown.menu_height == 5 * 44
+
+
+def test_menu_height_150():
+    """15 opciones (max=150) → sigue siendo 5 ítems visibles."""
+    section = TradingTypeSection()
+    section.set_max_leverage(150)
+    assert len(section._leverage_dropdown.options) == 15
+    assert section._leverage_dropdown.menu_height == 5 * 44
+
+
+def test_menu_height_small_list_no_padding():
+    """Pocas opciones → altura exacta del contenido, sin espacio vacío."""
+    section = TradingTypeSection()
+    section.set_max_leverage(3)  # [1, 2, 3]
+    assert len(section._leverage_dropdown.options) == 3
+    assert section._leverage_dropdown.menu_height == 3 * 44
+
+
+def test_options_have_fixed_height_content():
+    """Cada opción lleva un ítem de altura fija (hace exacta la cuenta de 5)."""
+    from ui.components.settings_sections import _LEVERAGE_ITEM_H
+    section = TradingTypeSection()
+    section.set_max_leverage(150)
+    for opt in section._leverage_dropdown.options:
+        assert opt.content is not None
+        assert opt.content.height == _LEVERAGE_ITEM_H
+        # Conserva text para que el campo colapsado muestre el valor
+        assert opt.text == f"{opt.key}x"
+
+
 def test_params_section_initial():
     section = OperationParamsSection()
     assert section.get_symbol() == "BTCUSDT"
