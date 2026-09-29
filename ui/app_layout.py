@@ -39,6 +39,7 @@ from services.audit_service import audit_service
 from services.paper_balance import paper_balance
 from ui.view_registry import ViewRegistry
 from ui.navigator import Navigator
+from ui.components.notification_toast import NotificationToast
 
 
 async def main(page: ft.Page) -> None:
@@ -146,6 +147,8 @@ async def main(page: ft.Page) -> None:
     # ------------------------------------------------------------------
     # Layout principal
     # ------------------------------------------------------------------
+    notification_toast = NotificationToast()
+
     background = ft.Container(
         expand=True,
         gradient=ft.LinearGradient(
@@ -153,12 +156,24 @@ async def main(page: ft.Page) -> None:
             end=ft.Alignment(1, 1),
             colors=["#0a0e1a", "#0d1b2a", "#0a1628"],
         ),
-        content=ft.Column(
+        content=ft.Stack(
             controls=[
-                ft.Container(content=view_container, expand=True),
-                nav_bar,
+                ft.Column(
+                    controls=[
+                        ft.Container(content=view_container, expand=True),
+                        nav_bar,
+                    ],
+                    spacing=0,
+                    expand=True,
+                ),
+                # Toast de notificaciones — visible en todas las vistas
+                ft.Container(
+                    content=notification_toast,
+                    top=12,
+                    left=16,
+                    right=16,
+                ),
             ],
-            spacing=0,
             expand=True,
         ),
     )

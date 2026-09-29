@@ -67,6 +67,17 @@ class OrderExecutedEvent:
     trading_type: Literal["SPOT", "FUTURES", "MARGIN"] = "SPOT"
     leverage: int = 1
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    operation_id: str = ""          # OC-xxx / OV-xxx (id de la operación, no del executor)
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class OrderFailedEvent:
+    """Fallo al ejecutar una orden — elimina errores silenciosos."""
+    operation_id: str
+    side: Literal["BUY", "SELL"]
+    error: str
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
     timestamp: float = field(default_factory=time.time)
 
 

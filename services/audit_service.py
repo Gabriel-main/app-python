@@ -30,6 +30,7 @@ from core.events import (
     OperationInsertedEvent,
     OperationUpdateEvent,
     OrderExecutedEvent,
+    OrderFailedEvent,
     PositionUpdateEvent,
     PriceTickEvent,
     SettingsUpdatedEvent,
@@ -238,6 +239,19 @@ HANDLER_REGISTRY: dict[type, HandlerConfig] = {
             "side": e.side,
             "quantity": e.quantity,
             "price": e.price,
+        },
+    ),
+    OrderFailedEvent: HandlerConfig(
+        category="ORDER",
+        action=lambda e: "FAILED",
+        detail=lambda e: (
+            f"Fallo {e.side} [{e.mode}] | {e.operation_id}: {e.error}"
+        ),
+        data=lambda e: {
+            "operation_id": e.operation_id,
+            "side": e.side,
+            "error": e.error,
+            "mode": e.mode,
         },
     ),
 }

@@ -97,13 +97,18 @@ class PaperBalanceService:
 
         self._publish_balance()
 
+    @staticmethod
+    def _position_key(event: OrderExecutedEvent) -> str:
+        """Clave de posición: operation_id (OC-/OV-) con fallback a order_id."""
+        return event.operation_id or event.order_id
+
     def _handle_buy(self, event: OrderExecutedEvent) -> None:
         """BUY: debitar costo de la posición y abrir tracking."""
         capital = settings.TRADE_AMOUNT  # Capital invertido
         self._free -= capital
         self._locked += capital
 
-        self._positions[event.order_id] = _OpenPosition(
+        self._positions[self._position_key(event)] = _OpenPosition(
             side="BUY",
             entry_price=event.entry_price,
             quantity=event.quantity,
@@ -117,7 +122,7 @@ class PaperBalanceService:
 
     def _handle_sell(self, event: OrderExecutedEvent) -> None:
         """SELL: cerrar posición, calcular PnL con fórmula unificada."""
-        position = self._positions.pop(event.order_id, None)
+        position = self._positions.pop(self._position_key(event), None)
 
         if position:
             resultado, pnl = PnLCalculator.calc_closed_pnl(

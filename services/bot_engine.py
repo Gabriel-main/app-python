@@ -31,6 +31,7 @@ from core.events import (
     OperationState,
     OperationUpdateEvent,
     OrderExecutedEvent,
+    OrderFailedEvent,
     PriceTickEvent,
     PositionUpdateEvent,
     SettingsUpdatedEvent,
@@ -47,7 +48,17 @@ log = logging.getLogger(__name__)
 
 
 class TradingOperation:
-    """Modelo interno de una operación individual."""
+    """Modelo interno de una operación individual.
+
+    State Pattern: las transiciones de estado son validadas centralizadamente.
+    """
+
+    # Transiciones válidas: PENDING → ACTIVE → PAST (estado terminal)
+    _VALID_TRANSITIONS: dict[str, frozenset[str]] = {
+        "PENDING": frozenset({"ACTIVE", "PAST"}),
+        "ACTIVE": frozenset({"PAST"}),
+        "PAST": frozenset(),
+    }
 
     def __init__(
         self,
@@ -66,6 +77,26 @@ class TradingOperation:
         self.order_id = order_id
         self.created_at = time.time()
         self.best_sl = stop_loss  # Mejor SL alcanzado (para trailing stop)
+
+    def transition_to(self, new_state: str) -> bool:
+        """Transición de estado validada. Retorna False si es inválida."""
+        allowed = self._VALID_TRANSITIONS.get(self.state, frozenset())
+        if new_state not in allowed:
+            log.warning(
+                "Invalid state transition %s → %s for %s (skipped)",
+                self.state, new_state, self.order_id,
+            )
+            return False
+        self.state = new_state
+        return True
+
+    def promote_to_active(self) -> bool:
+        """PENDING → ACTIVE: promoción de pendiente a operación activa."""
+        return self.transition_to("ACTIVE")
+
+    def mark_as_past(self) -> bool:
+        """ACTIVE/PENDING → PAST: operación completada."""
+        return self.transition_to("PAST")
 
     def to_event(self) -> OperationState:
         return OperationState(
@@ -91,7 +122,7 @@ class BotEngine:
         self._running: bool = False
         self._active: bool = False
         self._current_price: float = 0.0
-        self._executor = executor or create_executor(settings.TRADING_MODE)
+        self._executor: OrderExecutor | None = executor  # Se crea en start() (Fase 3)
 
         # Operaciones
         self._operations: list[TradingOperation] = []
@@ -131,6 +162,10 @@ class BotEngine:
         self._running = True
         self._active = False
 
+        # Fase 3: crear executor aquí (después de settings.load_from_db())
+        if self._executor is None:
+            self._executor = create_executor(settings.TRADING_MODE)
+
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
@@ -159,7 +194,8 @@ class BotEngine:
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
-        await self._executor.close()
+        if self._executor is not None:
+            await self._executor.close()
         log.info("BotEngine stopped")
 
     async def _publish_initial_state(self) -> None:
@@ -209,8 +245,11 @@ class BotEngine:
     async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
         """Activa o detiene el bot desde la UI."""
         if event.is_running and not self._active:
-            # Iniciar trading
-            await self._start_trading()
+            # Iniciar trading — solo activar si realmente arrancó
+            started = await self._start_trading()
+            self._active = started
+            log.info("BotEngine active: %s | mode: %s", self._active, event.mode)
+            return
         elif not event.is_running and self._active:
             # Detener trading
             await self._stop_trading()
@@ -219,8 +258,15 @@ class BotEngine:
         log.info("BotEngine active: %s | mode: %s", self._active, event.mode)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
-        """Recarga parámetros de estrategia."""
+        """Recarga parámetros de estrategia y recrea executor si cambió el modo."""
+        old_mode = settings.TRADING_MODE
         settings.from_event(event)
+
+        # Fase 3: recrear executor si PAPER ↔ LIVE cambió
+        if event.mode != old_mode and self._executor is not None:
+            await self._executor.close()
+            self._executor = create_executor(event.mode)
+            log.info("Executor recreated: %s → %s", old_mode, event.mode)
 
         log.info(
             "BotEngine settings reloaded: Type: %s | Leverage: %dx | SL: %s %s | TF: %d %s",
@@ -319,11 +365,17 @@ class BotEngine:
     # Lógica de trading dual (OC/OV)
     # ------------------------------------------------------------------
 
-    async def _start_trading(self) -> None:
-        """Inicia las operaciones duales: OC(a) + OV(p)."""
+    async def _start_trading(self) -> bool:
+        """Inicia las operaciones duales: OC(a) + OV(p). Retorna True si arrancó."""
         if self._current_price <= 0:
             log.warning("No price available yet. Waiting for first tick...")
-            return
+            event_bus.publish(OrderFailedEvent(
+                operation_id="STARTUP",
+                side="BUY",
+                error="No price available yet — bot activado sin precio",
+                mode=settings.TRADING_MODE,
+            ))
+            return False
 
         pa = self._current_price
         sl_dist = self._calculate_sl_distance(pa)
@@ -350,6 +402,7 @@ class BotEngine:
         await self._execute_initial_orders()
         self._publish_update()
         self._start_timeframe_timer()
+        return True
 
     async def _stop_trading(self) -> None:
         """Detiene trading: cierra posiciones y apaga timer."""
@@ -361,9 +414,9 @@ class BotEngine:
         # Eliminar operaciones pendientes
         self._operations = [op for op in self._operations if op.state == "ACTIVE"]
 
-        # Marcar activas como past
+        # Marcar activas como past (State Pattern: transición validada)
         for op in self._operations:
-            op.state = "PAST"
+            op.mark_as_past()
 
         self._publish_update()
         self._operations.clear()
@@ -619,27 +672,45 @@ class BotEngine:
                 task.add_done_callback(self._sl_tasks.discard)
 
     async def _execute_stop_loss(self, op: TradingOperation, trigger_price: float) -> None:
-        """Ejecuta la orden de stop loss."""
-        order_event = await self._execute_order(op, trigger_price)
+        """Ejecuta la orden de stop loss y promueve la siguiente operación."""
+        order_event = await self._dispatch_order(
+            op, trigger_price,
+            success_event_factory=lambda e: StopLossEvent(
+                order_id=e.order_id,
+                side=op.side,
+                quantity=op.quantity,
+                price=trigger_price,
+                mode=settings.TRADING_MODE,
+            ),
+        )
         if order_event is None:
             return
 
-        event_bus.publish(order_event)
-        db_queue.enqueue_order(order_event)
-        op.state = "PAST"
+        # State Pattern: transición validada ACTIVE → PAST
+        op.mark_as_past()
 
-        event_bus.publish(StopLossEvent(
-            order_id=order_event.order_id,
-            side=op.side,
-            quantity=op.quantity,
-            price=trigger_price,
-            mode=settings.TRADING_MODE,
-        ))
+        # Fase 1: promover PENDING → ACTIVE
+        promoted = self._promote_pending_to_active()
+        if promoted:
+            # Ejecutar la orden de la nueva ACTIVE
+            await self._dispatch_order(promoted)
+            self._publish_update()
 
         log.info("SL executed, operation marked PAST: %s", op.order_id)
 
+    def _promote_pending_to_active(self) -> TradingOperation | None:
+        """Promueve la primera PENDING a ACTIVE (State Pattern).
+
+        Retorna la operación promovida o None si no hay PENDING.
+        """
+        for op in self._operations:
+            if op.state == "PENDING" and op.promote_to_active():
+                log.info("PENDING promoted to ACTIVE: %s", op.order_id)
+                return op
+        return None
+
     # ------------------------------------------------------------------
-    # Ejecución de órdenes (DRY + DIP)
+    # Ejecución de órdenes (Template Method + DIP)
     # ------------------------------------------------------------------
 
     def _build_order_event(
@@ -658,13 +729,39 @@ class BotEngine:
             trading_type=settings.TRADING_TYPE,
             leverage=settings.LEVERAGE,
             order_type="MARKET",
+            operation_id=op.order_id,  # OC-xxx / OV-xxx (Fase 4)
             timestamp=time.time(),
         )
 
-    async def _execute_order(
-        self, op: TradingOperation, price: float = 0.0
+    async def _dispatch_order(
+        self,
+        op: TradingOperation,
+        price: float = 0.0,
+        success_event_factory=None,
     ) -> OrderExecutedEvent | None:
-        """Ejecuta una orden usando el strategy inyectado (DIP)."""
+        """Template Method: ejecuta → publica → persiste → maneja errores.
+
+        Elimina la duplicación de execute+publish+enqueue en los 3 call sites.
+        En caso de fallo publica OrderFailedEvent (nunca silencioso).
+
+        Args:
+            op: Operación a ejecutar.
+            price: Precio de fill forzado (0 = usar entry_price).
+            success_event_factory: Callable opcional que recibe OrderExecutedEvent
+                                   y retorna un evento extra (StopLossEvent, etc.).
+
+        Returns:
+            OrderExecutedEvent si tuvo éxito, None si falló.
+        """
+        if self._executor is None:
+            event_bus.publish(OrderFailedEvent(
+                operation_id=op.order_id,
+                side=op.side,
+                error="Executor not initialized",
+                mode=settings.TRADING_MODE,
+            ))
+            return None
+
         try:
             result = await self._executor.execute_market(
                 symbol=settings.TRADING_SYMBOL,
@@ -673,25 +770,37 @@ class BotEngine:
                 entry_price=op.entry_price if price == 0 else price,
                 stop_loss=op.stop_loss,
             )
-            return self._build_order_event(op, result)
         except Exception as exc:
             log.error("Order execution failed: %s", exc)
+            event_bus.publish(OrderFailedEvent(
+                operation_id=op.order_id,
+                side=op.side,
+                error=str(exc),
+                mode=settings.TRADING_MODE,
+            ))
             return None
+
+        order_event = self._build_order_event(op, result)
+        event_bus.publish(order_event)
+        db_queue.enqueue_order(order_event)
+
+        if success_event_factory is not None:
+            event_bus.publish(success_event_factory(order_event))
+
+        return order_event
 
     async def _execute_initial_orders(self) -> None:
         """Ejecuta las órdenes iniciales OC(a) y OV(p)."""
         for op in self._operations:
-            order_event = await self._execute_order(op)
-            if order_event:
-                event_bus.publish(order_event)
-                db_queue.enqueue_order(order_event)
-
-                event_bus.publish(InitialOrderEvent(
-                    order_id=order_event.order_id,
-                    side=op.side,
-                    quantity=op.quantity,
-                    price=order_event.price,
-                ))
+            await self._dispatch_order(
+                op,
+                success_event_factory=lambda e, _op=op: InitialOrderEvent(
+                    order_id=e.order_id,
+                    side=_op.side,
+                    quantity=_op.quantity,
+                    price=e.price,
+                ),
+            )
 
     async def _close_open_positions(self) -> None:
         """Cierra todas las posiciones abiertas al detener el bot."""
@@ -712,10 +821,7 @@ class BotEngine:
                 order_id=f"CLOSE-{op.order_id}",
             )
 
-            order_event = await self._execute_order(close_op, self._current_price)
-            if order_event:
-                event_bus.publish(order_event)
-                db_queue.enqueue_order(order_event)
+            await self._dispatch_order(close_op, self._current_price)
 
     # ------------------------------------------------------------------
     # Helpers
