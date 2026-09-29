@@ -59,6 +59,12 @@ class OrderExecutor(ABC):
         """Cierra recursos (cliente Binance, etc.)."""
         ...
 
+    def invalidate_leverage(self) -> None:
+        """Marca que el leverage debe re-aplicarse en el exchange.
+
+        Override en LiveExecutor. No-op en PaperExecutor.
+        """
+
 
 class PaperExecutor(OrderExecutor):
     """Ejecuta órdenes simuladas (sin conexión a Binance)."""
@@ -121,22 +127,31 @@ class LiveExecutor(OrderExecutor):
         )
 
     async def _set_leverage(self) -> None:
-        """Configura el leverage para Futures/Margin."""
-        try:
-            if settings.TRADING_TYPE == "FUTURES":
-                await self._client.futures_change_leverage(
-                    symbol=settings.TRADING_SYMBOL,
-                    leverage=settings.LEVERAGE,
-                )
-            elif settings.TRADING_TYPE == "MARGIN":
-                await self._client.change_margin(
-                    symbol=settings.TRADING_SYMBOL,
-                    leverage=settings.LEVERAGE,
-                )
-            self._leverage_set = True
-            log.info("Leverage set to %dx for %s", settings.LEVERAGE, settings.TRADING_TYPE)
-        except Exception as exc:
-            log.error("Failed to set leverage: %s", exc)
+        """Configura el leverage para Futures/Margin.
+
+        Lanza excepción si falla — el caller (_dispatch_order) publica
+        OrderFailedEvent y aborta la orden.
+        """
+        if settings.TRADING_TYPE == "FUTURES":
+            await self._client.futures_change_leverage(
+                symbol=settings.TRADING_SYMBOL,
+                leverage=settings.LEVERAGE,
+            )
+        elif settings.TRADING_TYPE == "MARGIN":
+            # Binance Cross Margin solo acepta 3x o 5x
+            effective = 5 if settings.LEVERAGE >= 5 else 3
+            await self._client.set_margin_max_leverage(
+                maxLeverage=effective,
+            )
+        self._leverage_set = True
+        log.info(
+            "Leverage set to %dx for %s",
+            settings.LEVERAGE, settings.TRADING_TYPE,
+        )
+
+    def invalidate_leverage(self) -> None:
+        """Marca que el leverage debe re-aplicarse en Binance."""
+        self._leverage_set = False
 
     async def close(self) -> None:
         """Cierra la conexión a Binance."""

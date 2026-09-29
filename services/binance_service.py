@@ -308,6 +308,33 @@ class BinanceService:
             log.error("Failed to validate symbol: %s", exc)
             return False, []
 
+    @staticmethod
+    async def get_max_leverage(client, symbol: str, trading_type: str) -> int:
+        """Obtiene el leverage máximo permitido por Binance para un símbolo.
+
+        FUTURES: consulta GET /fapi/v1/leverageBracket → initialLeverage
+                 del bracket con mayor tier (ej: BTCUSDT=125, SOLUSDT=100).
+        MARGIN:  Binance Cross Margin solo permite 3x o 5x.
+        SPOT:    leverage no aplica → 1.
+
+        Fallback en excepción: 20 (conservador).
+        """
+        if trading_type == "SPOT":
+            return 1
+        if trading_type == "MARGIN":
+            return 5
+        try:
+            brackets = await client.futures_leverage_bracket(symbol=symbol.upper())
+            if brackets and isinstance(brackets, list):
+                # Respuesta: [{symbol: ..., brackets: [{bracket:1, initialLeverage:150, ...}, ...]}]
+                # El primer bracket tiene el leverage máximo.
+                inner = brackets[0].get("brackets", [])
+                if inner:
+                    return int(inner[0].get("initialLeverage", 20))
+        except Exception as exc:
+            log.error("Failed to get max leverage for %s: %s", symbol, exc)
+        return 20
+
     async def _validate_symbol(self, client) -> bool:
         """Valida que el símbolo exista en el mercado seleccionado."""
         exists, _ = await self.validate_symbol_for_market(

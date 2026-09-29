@@ -20,6 +20,9 @@ class SymbolRepository(Protocol):
     async def validate_symbol(
         self, symbol: str, trading_type: str,
     ) -> tuple[bool, list[str]]: ...
+    async def get_max_leverage(
+        self, symbol: str, trading_type: str,
+    ) -> int: ...
 
 
 class BinanceSymbolRepository:
@@ -46,6 +49,16 @@ class BinanceSymbolRepository:
         finally:
             await client.close_connection()
 
+    async def get_max_leverage(self, symbol: str, trading_type: str) -> int:
+        from services.binance_client import create_client
+        client = await create_client()
+        try:
+            return await self._service.get_max_leverage(
+                client, symbol, trading_type,
+            )
+        finally:
+            await client.close_connection()
+
 
 class EventBusSymbolRepository:
     """Implementación que usa EventBus para solicitar símbolos."""
@@ -66,6 +79,17 @@ class EventBusSymbolRepository:
         client = await create_client()
         try:
             return await binance_service.validate_symbol_for_market(
+                client, symbol, trading_type,
+            )
+        finally:
+            await client.close_connection()
+
+    async def get_max_leverage(self, symbol: str, trading_type: str) -> int:
+        from services.binance_client import create_client
+        from services.binance_service import binance_service
+        client = await create_client()
+        try:
+            return await binance_service.get_max_leverage(
                 client, symbol, trading_type,
             )
         finally:

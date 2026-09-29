@@ -57,6 +57,61 @@ def test_type_section_get_limit_price():
     assert isinstance(price, float)
 
 
+# ---------------------------------------------------------------------------
+# set_max_leverage — dropdown dinámico según máximo de Binance
+# ---------------------------------------------------------------------------
+def test_set_max_leverage_150():
+    """max=150 → todas las opciones disponibles."""
+    section = TradingTypeSection()
+    section.set_max_leverage(150)
+    keys = [int(o.key) for o in section._leverage_dropdown.options]
+    assert keys == [1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150]
+
+
+def test_set_max_leverage_125():
+    """max=125 → sin 150."""
+    section = TradingTypeSection()
+    section.set_max_leverage(125)
+    keys = [int(o.key) for o in section._leverage_dropdown.options]
+    assert 150 not in keys
+    assert 125 in keys
+    assert keys[-1] == 125
+
+
+def test_set_max_leverage_50():
+    """max=50 → recorta en 50."""
+    section = TradingTypeSection()
+    section.set_max_leverage(50)
+    keys = [int(o.key) for o in section._leverage_dropdown.options]
+    assert keys == [1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50]
+
+
+def test_set_max_leverage_clamps_current_value():
+    """Si el valor actual supera el nuevo max, baja al mayor permitido."""
+    section = TradingTypeSection()
+    section.set_max_leverage(150)
+    section._leverage_dropdown.value = "150"
+    section.set_max_leverage(50)
+    assert int(section._leverage_dropdown.value) == 50
+
+
+def test_set_max_leverage_label_visible_futures():
+    """En FUTURES muestra label con el máximo."""
+    section = TradingTypeSection()
+    section._trading_type_dropdown.value = "FUTURES"
+    section.set_max_leverage(125)
+    assert section._max_lev_label.visible is True
+    assert "125" in section._max_lev_label.value
+
+
+def test_set_max_leverage_label_hidden_spot():
+    """En SPOT oculta el label."""
+    section = TradingTypeSection()
+    section._trading_type_dropdown.value = "SPOT"
+    section.set_max_leverage(125)
+    assert section._max_lev_label.visible is False
+
+
 def test_params_section_initial():
     section = OperationParamsSection()
     assert section.get_symbol() == "BTCUSDT"

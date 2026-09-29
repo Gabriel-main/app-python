@@ -60,7 +60,7 @@ class Order(SQLModel, table=True):
     price: float
     mode: str                          # "PAPER" | "LIVE"
     trading_type: str = "SPOT"         # "SPOT" | "FUTURES" | "MARGIN"
-    leverage: int = 1                  # 1x-20x (solo Futures/Margin)
+    leverage: int = 1                  # 1x-150x según límite de Binance por símbolo (solo Futures/Margin)
     order_type: str = "MARKET"         # "MARKET" | "LIMIT"
     status: str = Field(default="FILLED")   # "FILLED" | "PENDING" | "CANCELLED"
     pnl: Optional[float] = None        # Profit & Loss calculado al cerrar

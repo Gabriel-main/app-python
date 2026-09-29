@@ -258,15 +258,29 @@ class BotEngine:
         log.info("BotEngine active: %s | mode: %s", self._active, event.mode)
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
-        """Recarga parámetros de estrategia y recrea executor si cambió el modo."""
+        """Recarga parámetros de estrategia, recrea executor si cambió el modo,
+        y invalida leverage si cambió leverage o símbolo."""
         old_mode = settings.TRADING_MODE
+        old_leverage = settings.LEVERAGE
+        old_symbol = settings.TRADING_SYMBOL
         settings.from_event(event)
 
-        # Fase 3: recrear executor si PAPER ↔ LIVE cambió
+        # Recrear executor si PAPER ↔ LIVE cambió
         if event.mode != old_mode and self._executor is not None:
             await self._executor.close()
             self._executor = create_executor(event.mode)
             log.info("Executor recreated: %s → %s", old_mode, event.mode)
+
+        # Re-aplicar leverage en Binance si cambió leverage o símbolo
+        if (
+            (event.leverage != old_leverage or event.symbol != old_symbol)
+            and self._executor is not None
+        ):
+            self._executor.invalidate_leverage()
+            log.info(
+                "Leverage invalidated: %dx → %dx | symbol: %s → %s",
+                old_leverage, event.leverage, old_symbol, event.symbol,
+            )
 
         log.info(
             "BotEngine settings reloaded: Type: %s | Leverage: %dx | SL: %s %s | TF: %d %s",

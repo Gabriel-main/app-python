@@ -18,6 +18,11 @@ from core.update_batcher import update_batcher
 from ui.components.api_key_manager import ApiKeyManager
 from ui.components.symbol_picker import SymbolPicker
 
+# Pasos disponibles para el dropdown de leverage (filtrados por max de Binance)
+_LEVERAGE_STEPS: list[int] = [
+    1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150,
+]
+
 
 # ---------------------------------------------------------------------------
 # Helper: Bloqueo de campos (DRY)
@@ -327,13 +332,22 @@ class TradingTypeSection(ft.Container):
             on_select=self._on_trading_type_changed,
         )
 
-        leverage_options = [ft.DropdownOption(key=str(i), text=f"{i}x") for i in [1, 2, 3, 5, 10, 15, 20]]
+        leverage_options = [
+            ft.DropdownOption(key=str(i), text=f"{i}x")
+            for i in _LEVERAGE_STEPS if i <= 20  # default: hasta 20x (se amplía con set_max_leverage)
+        ]
         self._leverage_dropdown = _dropdown(
             label="Leverage",
             value=str(settings.LEVERAGE),
             options=leverage_options,
             focused_color=ft.Colors.PURPLE_400,
             visible=settings.TRADING_TYPE in ("FUTURES", "MARGIN"),
+        )
+        self._max_lev_label = ft.Text(
+            "",
+            size=11,
+            color=ft.Colors.BLUE_GREY_400,
+            visible=False,
         )
 
         self._order_type_dropdown = _dropdown(
@@ -367,6 +381,7 @@ class TradingTypeSection(ft.Container):
                 ft.Text("🔄 Tipo de Trading", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                 self._trading_type_dropdown,
                 self._leverage_dropdown,
+                self._max_lev_label,
                 self._order_type_dropdown,
                 self._limit_price_field,
                 ft.Text("Futures/Margin permiten leverage y posiciones long/short.", size=11, color=ft.Colors.BLUE_GREY_400),
@@ -397,6 +412,34 @@ class TradingTypeSection(ft.Container):
 
     def get_leverage(self) -> int:
         return int(self._leverage_dropdown.value or "1")
+
+    def set_max_leverage(self, max_leverage: int) -> None:
+        """Actualiza las opciones del dropdown según el máximo de Binance.
+
+        Filtra _LEVERAGE_STEPS a los valores <= max_leverage.
+        Si el valor actual supera el nuevo máximo, baja al mayor permitido.
+        """
+        steps = [i for i in _LEVERAGE_STEPS if i <= max_leverage]
+        if not steps:
+            steps = [1]
+
+        options = [ft.DropdownOption(key=str(i), text=f"{i}x") for i in steps]
+        self._leverage_dropdown.options = options
+
+        current = int(self._leverage_dropdown.value or "1")
+        if current > max_leverage:
+            self._leverage_dropdown.value = str(steps[-1])
+
+        # Label indicativo del máximo
+        trading_type = self._trading_type_dropdown.value or "SPOT"
+        if trading_type in ("FUTURES", "MARGIN"):
+            self._max_lev_label.value = f"Máximo permitido: {max_leverage}x"
+            self._max_lev_label.visible = True
+        else:
+            self._max_lev_label.visible = False
+
+        update_batcher.mark_dirty(self._leverage_dropdown)
+        update_batcher.mark_dirty(self._max_lev_label)
 
     def get_order_type(self) -> str:
         return self._order_type_dropdown.value or "MARKET"

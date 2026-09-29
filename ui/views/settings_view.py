@@ -129,6 +129,8 @@ class SettingsView(ft.Column):
         self._bot_active = bot_engine.is_active
         self._update_form_lock()
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
+        # Consultar leverage máximo de Binance para el símbolo actual
+        asyncio.create_task(self._refresh_max_leverage())
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
@@ -179,10 +181,12 @@ class SettingsView(ft.Column):
     # ------------------------------------------------------------------
     def _on_symbol_changed_for_validation(self, symbol: str) -> None:
         asyncio.create_task(self._validate_current_symbol())
+        asyncio.create_task(self._refresh_max_leverage())
 
     def _on_trading_type_changed_for_validation(self, trading_type: str) -> None:
         self._params_section.update_trading_type(trading_type)
         asyncio.create_task(self._validate_current_symbol())
+        asyncio.create_task(self._refresh_max_leverage())
 
     def _on_currency_changed_for_reload(self, currency: str) -> None:
         if self._symbol_repository:
@@ -210,6 +214,22 @@ class SettingsView(ft.Column):
         except Exception:
             self._validation_indicator.set_status(SymbolValidationIndicator.ERROR)
         self._update_save_button_state()
+
+    async def _refresh_max_leverage(self) -> None:
+        """Consulta el leverage máximo de Binance para el símbolo actual
+        y actualiza las opciones del dropdown."""
+        if not self._symbol_repository:
+            return
+        symbol = self._params_section.get_symbol()
+        trading_type = self._type_section.get_trading_type()
+        try:
+            max_lev = await self._symbol_repository.get_max_leverage(
+                symbol, trading_type,
+            )
+            self._type_section.set_max_leverage(max_lev)
+        except Exception:
+            # Fallback silencioso — el dropdown mantiene sus opciones actuales
+            pass
 
     # ------------------------------------------------------------------
     # Build form data

@@ -172,12 +172,13 @@ HANDLER_REGISTRY: dict[type, HandlerConfig] = {
         category="CONFIG",
         action=lambda e: "UPDATED",
         detail=lambda e: (
-            f"Config actualizada: {e.symbol} | {e.mode} | {e.trading_type}"
+            f"Config: {e.symbol} | {e.mode} | {e.trading_type} | {e.leverage}x"
         ),
         data=lambda e: {
             "symbol": e.symbol,
             "mode": e.mode,
             "trading_type": e.trading_type,
+            "leverage": e.leverage,
         },
     ),
     TradingLifecycleEvent: HandlerConfig(
