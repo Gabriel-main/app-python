@@ -35,6 +35,16 @@ STATE_COLORS: dict[str, tuple[ft.Color, ft.Color, str]] = {
 
 
 # ---------------------------------------------------------------------------
+# Estado de orden (FILLED / PENDING / CANCELLED)
+# ---------------------------------------------------------------------------
+STATUS_COLORS: dict[str, tuple[ft.Color, str]] = {
+    "FILLED":    (ft.Colors.GREEN_400, "FILLED"),
+    "PENDING":   (ft.Colors.AMBER_400, "PENDIENTE"),
+    "CANCELLED": (ft.Colors.RED_400,   "CANCELADA"),
+}
+
+
+# ---------------------------------------------------------------------------
 # Tipo de trading
 # ---------------------------------------------------------------------------
 TRADING_TYPE_COLORS: dict[str, tuple[ft.Color, ft.Color, str]] = {

@@ -359,12 +359,23 @@ class BotEngine:
             event.timeframe, event.timeframe_unit,
         )
 
+        # Auto-sanado: la cancelación por settings_changed anterior pudo dejar
+        # la entrada de la operación ACTIVE sin orden working. Se recoloca ya
+        # con los settings recién aplicados (si no, el bot queda muerto: sin
+        # fill no hay SL, sin SL no hay promoción).
+        await self._heal_orphan_entry()
+
     # ------------------------------------------------------------------
     # Indicador visual: MA Crossover (no afecta operaciones OC/OV)
     # ------------------------------------------------------------------
 
     def _publish_bot_signal(self, symbol: str) -> None:
-        """Calcula MA y publica BotSignalEvent para el indicador visual."""
+        """Calcula MA y publica BotSignalEvent para el indicador visual.
+
+        `signal` es el estado ACTUAL de la relación MA (nivel, no borde):
+        la UI lo pinta directamente. `changed` marca el borde del cruce
+        para que AuditService registre solo la transición.
+        """
         prices = list(self._price_buffer)
         fast = settings.BOT_MA_FAST
         slow = settings.BOT_MA_SLOW
@@ -372,16 +383,15 @@ class BotEngine:
         ma_fast = sum(prices[-fast:]) / fast
         ma_slow = sum(prices[-slow:]) / slow
 
-        if ma_fast > ma_slow and self._last_signal != "BUY":
-            signal = "BUY"
-            self._last_signal = signal
-        elif ma_fast < ma_slow and self._last_signal != "SELL":
-            signal = "SELL"
-            self._last_signal = signal
-        else:
-            signal = "HOLD"
+        signal = (
+            "BUY" if ma_fast > ma_slow
+            else "SELL" if ma_fast < ma_slow
+            else "HOLD"
+        )
+        changed = signal != self._last_signal
+        self._last_signal = signal
 
-        confidence = min(abs(ma_fast - ma_slow) / ma_slow * 100, 1.0) if ma_slow > 0 else 0.0
+        confidence = min(abs(ma_fast - ma_slow) / ma_slow, 1.0) if ma_slow > 0 else 0.0
 
         event_bus.publish(BotSignalEvent(
             symbol=symbol,
@@ -389,6 +399,7 @@ class BotEngine:
             ma_fast=round(ma_fast, 2),
             ma_slow=round(ma_slow, 2),
             confidence=round(confidence, 4),
+            changed=changed,
         ))
 
     def _publish_position_updates(self, current_price: float) -> None:
@@ -1122,19 +1133,61 @@ class BotEngine:
             log.info("Cancelled %d working LIMIT orders (%s)", cancelled, reason)
         return cancelled
 
+    @staticmethod
+    def _initial_order_factory(
+        op: TradingOperation,
+    ) -> Callable[[OrderExecutedEvent], InitialOrderEvent]:
+        """Factory de InitialOrderEvent para una entrada (DRY: arranque + heal)."""
+        def factory(e: OrderExecutedEvent) -> InitialOrderEvent:
+            return InitialOrderEvent(
+                order_id=e.order_id,
+                side=op.side,
+                quantity=op.quantity,
+                price=e.price,
+            )
+        return factory
+
     async def _execute_initial_orders(self) -> None:
-        """Ejecuta las órdenes iniciales OC(a) y OV(p) (ENTRY)."""
+        """Ejecuta la orden inicial de la operación ACTIVE (ENTRY)."""
         for op in self._operations:
+            if op.state != "ACTIVE":
+                # La PENDING recibe su entrada al ser promovida
+                # (_execute_stop_loss → promote → dispatch). Despacharla aquí
+                # abriría una posición huérfana (state != ACTIVE la salta el SL).
+                continue
             await self._dispatch_order(
                 op,
-                success_event_factory=lambda e, _op=op: InitialOrderEvent(
-                    order_id=e.order_id,
-                    side=_op.side,
-                    quantity=_op.quantity,
-                    price=e.price,
-                ),
+                success_event_factory=self._initial_order_factory(op),
                 purpose="ENTRY",
             )
+
+    async def _heal_orphan_entry(self) -> None:
+        """Recoloca la entrada de una operación ACTIVE sin fill y sin orden.
+
+        Cuando `_cancel_working_orders(..., "settings_changed")` deja una op
+        huérfana, el bot queda muerto: sin fill no hay SL (`_check_stop_losses`
+        hace gate sobre `entry_filled`), sin SL no hay promoción de la PENDING.
+        Idempotente: si la op ya tiene orden working, no duplica.
+        """
+        if not self._active:
+            return  # bot pausado: al arrancar `_start_trading` despacha fresco
+
+        for op in self._operations:
+            if op.state != "ACTIVE" or op.entry_filled:
+                continue
+            if any(w.operation is op for w in self._working_orders.values()):
+                continue  # ya tiene orden working
+
+            log.warning(
+                "Orphan ENTRY detected (%s, %s) — re-placing",
+                op.order_id, op.side,
+            )
+            await self._dispatch_order(
+                op,
+                success_event_factory=self._initial_order_factory(op),
+                purpose="ENTRY",
+            )
+            return  # solo existe una op ACTIVE
 
     async def _close_open_positions(self) -> None:
         """Cierra todas las posiciones abiertas al detener el bot."""

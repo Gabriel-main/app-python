@@ -116,7 +116,7 @@ HANDLER_REGISTRY: dict[type, HandlerConfig] = {
     ),
     BotSignalEvent: HandlerConfig(
         category="SIGNAL",
-        filter=lambda e: e.signal != "HOLD",
+        filter=lambda e: e.changed and e.signal != "HOLD",
         action=lambda e: f"{e.signal}_SIGNAL",
         detail=lambda e: (
             f"{e.signal} | MA({e.ma_fast:.2f}) vs MA({e.ma_slow:.2f}) "

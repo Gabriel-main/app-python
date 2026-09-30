@@ -15,6 +15,7 @@ from core.event_bus import event_bus
 from core.events import PositionUpdateEvent
 from core.update_batcher import update_batcher
 from ui.components.position_card import PositionCard
+from ui.components.empty_state import EmptyState
 
 
 class PositionsPanel(ft.Container):
@@ -24,11 +25,11 @@ class PositionsPanel(ft.Container):
         super().__init__()
         self._positions: dict[str, dict] = {}
 
-        self._empty_text = ft.Text(
+        self._empty_text = EmptyState(
             "Sin posiciones abiertas.",
-            size=12,
-            color=ft.Colors.BLUE_GREY_400,
-            text_align=ft.TextAlign.CENTER,
+            subtitle="Aparecerán aquí al abrirse una operación.",
+            icon=ft.Icons.SHOW_CHART_OUTLINED,
+            title_size=12,
         )
         self._count_text = ft.Text("0 posiciones", size=11, color=ft.Colors.BLUE_GREY_400)
         self._total_pnl_text = ft.Text(

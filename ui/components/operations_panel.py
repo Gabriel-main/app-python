@@ -16,6 +16,7 @@ from core.events import OperationState, OperationUpdateEvent
 from core.update_batcher import update_batcher
 from ui.components.colors import SIDE_COLORS, SIDE_LABELS, STATE_COLORS
 from ui.components.badges import Badge
+from ui.components.empty_state import EmptyState
 
 
 def _format_time(seconds: float) -> str:
@@ -114,11 +115,11 @@ class OperationsPanel(ft.Container):
         self._timeframe_remaining: float = 0.0
         self._timeframe_total: float = 0.0
 
-        self._empty_text = ft.Text(
+        self._empty_text = EmptyState(
             "Sin operaciones activas.",
-            size=12,
-            color=ft.Colors.BLUE_GREY_400,
-            text_align=ft.TextAlign.CENTER,
+            subtitle="El bot abrirá una operación al detectar una señal.",
+            icon=ft.Icons.SWAP_VERT_OUTLINED,
+            title_size=12,
         )
 
         self._timer_text = ft.Text(

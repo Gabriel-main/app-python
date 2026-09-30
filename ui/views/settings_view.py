@@ -30,6 +30,7 @@ from ui.components.settings_sections import (
     validate_stop_loss,
     validate_timeframe,
 )
+from ui.components.view_header import ViewHeader
 
 
 class SettingsView(ft.Column):
@@ -92,20 +93,13 @@ class SettingsView(ft.Column):
 
         # --- Layout ---
         self.controls = [
-            ft.Row(
-                controls=[
-                    self._back_btn,
-                    ft.Text(
-                        "Ajustes del Bot",
-                        size=22,
-                        weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.WHITE,
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.START,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ViewHeader(
+                "Ajustes del Bot",
+                leading=self._back_btn,
+                divider_width=380,
+                divider_height=20,
+                spacing=16,
             ),
-            ft.Container(width=380, content=ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=20)),
             self._mode_section,
             self._type_section,
             self._params_section,

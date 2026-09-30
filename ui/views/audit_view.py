@@ -19,6 +19,8 @@ from core.events import AuditEvent
 from core.update_batcher import update_batcher
 from services.audit_service import audit_service
 from ui.components.audit_card import AuditCard
+from ui.components.empty_state import EmptyState
+from ui.components.view_header import ViewHeader
 
 # Categorías disponibles para filtro
 _CATEGORIES = [
@@ -64,25 +66,18 @@ class AuditView(ft.Column):
             expand=True,
         )
 
-        self._empty_label = ft.Text(
-            "Esperando eventos...\nEl bot publicará eventos aquí.",
-            size=13,
-            color=ft.Colors.BLUE_GREY_400,
-            text_align=ft.TextAlign.CENTER,
+        self._empty_label = EmptyState(
+            "Esperando eventos...",
+            subtitle="El bot publicará eventos aquí.",
+            icon=ft.Icons.FACT_CHECK_OUTLINED,
         )
+        self._list_column.controls.append(self._empty_label)
 
         self.controls = [
-            # Header
-            ft.Row(
-                controls=[
-                    ft.Text("Auditoría", size=22, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                    ft.Container(expand=True),
-                    self._filter_dropdown,
-                    self._event_count_text,
-                ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ViewHeader(
+                "Auditoría",
+                trailing=[self._filter_dropdown, self._event_count_text],
             ),
-            ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE), height=1),
             self._list_column,
         ]
         self.spacing = 12
@@ -113,6 +108,8 @@ class AuditView(ft.Column):
             return
 
         self._events.append(event)
+        if self._empty_label.visible:
+            self._empty_label.visible = False
         self._list_column.controls.append(AuditCard(event))
 
         # Mantener máximo 200 tarjetas en UI
@@ -129,19 +126,20 @@ class AuditView(ft.Column):
 
     def _rebuild_list(self) -> None:
         """Reconstruye la lista de tarjetas según el filtro actual."""
-        self._list_column.controls.clear()
-
         if self._category_filter == "TODOS":
             filtered = self._events
         else:
             filtered = [e for e in self._events if e.category == self._category_filter]
+        filtered = filtered[-200:]
 
-        for event in filtered[-200:]:
-            self._list_column.controls.append(AuditCard(event))
+        self._empty_label.visible = not filtered
+        self._list_column.controls = (
+            [self._empty_label] + [AuditCard(e) for e in filtered]
+        )
 
         self._update_count()
         update_batcher.mark_dirty(self._list_column)
 
     def _update_count(self) -> None:
-        count = len(self._list_column.controls)
+        count = sum(1 for c in self._list_column.controls if isinstance(c, AuditCard))
         self._event_count_text.value = f"{count} evento{'s' if count != 1 else ''}"

@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from core.events import (
+    InitialOrderEvent,
     OrderCanceledEvent,
     OrderExecutedEvent,
     OrderPlacedEvent,
@@ -26,6 +27,18 @@ def _make_settings(order_type="LIMIT", limit_price=65000.0, mode="PAPER"):
     m.TRADING_TYPE = "SPOT"
     m.LEVERAGE = 1
     m.TRADE_AMOUNT = 10.0
+
+    # Comportamiento real de `settings.from_event`: si no, el mock nunca
+    # refleja los nuevos valores y no se puede asertar el límite re-colocado.
+    def _from_event(e):
+        m.ORDER_TYPE = e.order_type
+        m.LIMIT_PRICE = e.limit_price
+        m.TRADING_MODE = e.mode
+        m.TRADING_SYMBOL = e.symbol
+        m.TRADING_TYPE = e.trading_type
+        m.LEVERAGE = e.leverage
+
+    m.from_event = _from_event
     return m
 
 
@@ -313,3 +326,159 @@ async def test_complete_limit_fill_sets_purpose_entry():
         assert len(executed) == 1
         assert executed[0].purpose == "ENTRY"
         assert executed[0].side == "BUY"
+
+
+# ---------------------------------------------------------------------------
+# Auto-sanado: cancelar por settings debe re-colocar la entrada
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_settings_change_replaces_entry_when_bot_active():
+    """Cancelar por settings_changed deja la ACTIVE sin orden → se recoloca."""
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        op = _make_op()
+        engine._operations = [op]
+        await engine._dispatch_order(op, purpose="ENTRY")
+        assert len(engine._working_orders) == 1
+        bus.publish.reset_mock()   # aislar los eventos de settings_updated
+
+        await engine._on_settings_updated(SettingsUpdatedEvent(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65500.0,  # cambió
+        ))
+
+        cancelled = _published(bus, OrderCanceledEvent)
+        assert len(cancelled) == 1
+        assert cancelled[0].reason == "settings_changed"
+
+        placed = _published(bus, OrderPlacedEvent)
+        assert len(placed) == 1
+        assert placed[0].price == 65500.0          # con el límite nuevo
+        assert placed[0].operation_id == "OC-TEST01"
+        assert len(engine._working_orders) == 1   # huérfana → recolocada
+        assert op.entry_filled is False
+
+
+@pytest.mark.asyncio
+async def test_settings_update_heals_orphan_without_settings_change():
+    """La ACTIVE sin fill y sin orden se recoloca aunque nada se invalidó."""
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        op = _make_op()
+        engine._operations = [op]          # huérfana: sin orden working
+
+        await engine._on_settings_updated(SettingsUpdatedEvent(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65000.0,  # sin cambio
+        ))
+
+        assert len(engine._working_orders) == 1
+        assert len(_published(bus, OrderPlacedEvent)) == 1
+        assert _published(bus, OrderCanceledEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_settings_update_does_not_heal_when_paused():
+    engine = _engine()   # _active es False por defecto
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]
+
+        await engine._on_settings_updated(SettingsUpdatedEvent(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65000.0,
+        ))
+
+        assert engine._working_orders == {}
+        assert _published(bus, OrderPlacedEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_settings_update_does_not_duplicate_working_order():
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        op = _make_op()
+        engine._operations = [op]
+        await engine._dispatch_order(op, purpose="ENTRY")
+        assert len(engine._working_orders) == 1
+        bus.publish.reset_mock()   # aislar los eventos de settings_updated
+
+        await engine._on_settings_updated(SettingsUpdatedEvent(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65000.0,  # sin cambio
+        ))
+
+        assert len(engine._working_orders) == 1
+        assert _published(bus, OrderPlacedEvent) == []
+        assert _published(bus, OrderCanceledEvent) == []
+
+
+# ---------------------------------------------------------------------------
+# Arranque: solo la operación ACTIVE recibe orden
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_execute_initial_orders_dispatches_only_active():
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        active = _make_op(side="BUY", state="ACTIVE")
+        pending = TradingOperation(
+            side="SELL", state="PENDING",
+            entry_price=64900.0, stop_loss=65100.0,
+            quantity=0.001, order_id="OV-TEST01",
+            entry_filled=False,
+        )
+        engine._operations = [active, pending]
+
+        await engine._execute_initial_orders()
+
+        placed = _published(bus, OrderPlacedEvent)
+        assert len(placed) == 1                      # la PENDING no recibe orden
+        assert placed[0].operation_id == "OC-TEST01"
+        assert placed[0].side == "BUY"
+        assert [w.operation for w in engine._working_orders.values()] == [active]
+
+
+@pytest.mark.asyncio
+async def test_execute_initial_orders_emits_initial_order_event_on_fill():
+    """La factory compartida (_initial_order_factory) publica al llenar."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings(order_type="MARKET")), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        active = _make_op(side="BUY", state="ACTIVE")
+        pending = TradingOperation(
+            side="SELL", state="PENDING",
+            entry_price=64900.0, stop_loss=65100.0,
+            quantity=0.001, order_id="OV-TEST01",
+            entry_filled=False,
+        )
+        engine._operations = [active, pending]
+
+        await engine._execute_initial_orders()
+
+        executed = _published(bus, OrderExecutedEvent)
+        assert len(executed) == 1
+        initials = _published(bus, InitialOrderEvent)
+        assert len(initials) == 1
+        assert initials[0].order_id == executed[0].order_id
+        assert initials[0].side == "BUY"
+        assert active.entry_filled is True
+        assert pending.entry_filled is False

@@ -5,6 +5,7 @@ from ui.components.colors import (
     SIDE_COLORS,
     SIDE_LABELS,
     STATE_COLORS,
+    STATUS_COLORS,
     TRADING_TYPE_COLORS,
     SIGNAL_COLORS,
     CONNECTION_COLORS,
@@ -67,3 +68,12 @@ def test_connection_colors_tuples_have_3_elements():
 def test_mode_colors_has_paper_live():
     assert "PAPER" in MODE_COLORS
     assert "LIVE" in MODE_COLORS
+
+
+def test_status_colors_has_filled_pending_cancelled():
+    assert set(STATUS_COLORS.keys()) == {"FILLED", "PENDING", "CANCELLED"}
+
+
+def test_status_colors_tuples_have_2_elements():
+    for key, val in STATUS_COLORS.items():
+        assert len(val) == 2, f"{key} should have 2 elements (color, label)"

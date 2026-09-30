@@ -50,6 +50,7 @@ class BotSignalEvent:
     ma_fast: float           # valor MA rápida
     ma_slow: float           # valor MA lenta
     confidence: float        # 0.0–1.0 (qué tan pronunciado es el cruce)
+    changed: bool = True     # True si `signal` cambió respecto al tick anterior
     timestamp: float = field(default_factory=time.time)
 
 

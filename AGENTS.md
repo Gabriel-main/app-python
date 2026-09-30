@@ -89,6 +89,11 @@ valida separación de capas y aplica reglas de reactividad.
 > (libera capital + PnL). El lado de la orden en `EXIT` es el OPUESTO al de la
 > operación (`_build_order_request` lo invierte). `paper_balance` jamás acredita
 > un `EXIT` sin posición trackeada (evita inflar el wallet).
+>
+> **Regla `changed` en `BotSignalEvent`**: `signal` es el estado ACTUAL de la
+> relación MA (nivel, no borde) — `BotStatusBar` lo pinta directamente.
+> `changed=True` marca el borde del cruce; `AuditService` filtra
+> `changed and signal != "HOLD"` para registrar solo la transición (1 por cruce).
 
 ---
 

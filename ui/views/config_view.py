@@ -12,6 +12,7 @@ from core.event_bus import event_bus
 from core.events import NavigateToEvent
 from core.update_batcher import update_batcher
 from services.auth_service import auth_service
+from ui.components.view_header import ViewHeader
 
 
 class ConfigView(ft.Column):
@@ -36,19 +37,11 @@ class ConfigView(ft.Column):
         )
 
         self.controls = [
-            ft.Text(
+            ViewHeader(
                 "Configuración",
-                size=22,
-                weight=ft.FontWeight.BOLD,
-                color=ft.Colors.WHITE,
-                text_align=ft.TextAlign.CENTER,
-            ),
-            ft.Container(
-                width=380,
-                content=ft.Divider(
-                    color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE),
-                    height=20,
-                ),
+                divider_width=380,
+                divider_height=20,
+                spacing=8,
             ),
             ft.Container(height=10),
             self._build_menu_item(

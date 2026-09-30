@@ -25,6 +25,7 @@ from ui.components.price_ticker import PriceTicker
 from ui.components.stats_24h import Stats24H
 from ui.components.balance_card import BalanceCard
 from ui.components.bot_status_bar import BotStatusBar
+from ui.components.view_header import ViewHeader
 
 log = logging.getLogger(__name__)
 
@@ -64,24 +65,11 @@ class DashboardView(ft.Column):
 
     def _build_header(self) -> ft.Control:
         """Construye el header con título, indicador de conexión y badge de modo."""
-        return ft.Row(
-            controls=[
-                ft.Column(
-                    controls=[
-                        ft.Text(
-                            settings.APP_TITLE,
-                            size=22,
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.WHITE,
-                        ),
-                        self._conn_indicator,
-                    ],
-                    spacing=2,
-                ),
-                ft.Container(expand=True),
-                self._mode_badge,
-            ],
-            vertical_alignment=ft.CrossAxisAlignment.START,
+        return ViewHeader(
+            settings.APP_TITLE,
+            subtitle=self._conn_indicator,
+            trailing=[self._mode_badge],
+            show_divider=False,
         )
 
     def _build_price_section(self) -> ft.Control:
