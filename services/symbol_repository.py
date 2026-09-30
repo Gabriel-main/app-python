@@ -10,6 +10,7 @@ from typing import Protocol
 
 from core.event_bus import event_bus
 from core.events import SymbolsListEvent
+from services.trading_rules import SymbolFilters
 
 
 class SymbolRepository(Protocol):
@@ -23,6 +24,10 @@ class SymbolRepository(Protocol):
     async def get_max_leverage(
         self, symbol: str, trading_type: str,
     ) -> int: ...
+    async def get_symbol_price(self, symbol: str) -> float: ...
+    async def get_symbol_filters(
+        self, symbol: str, trading_type: str,
+    ) -> SymbolFilters: ...
 
 
 class BinanceSymbolRepository:
@@ -59,6 +64,14 @@ class BinanceSymbolRepository:
         finally:
             await client.close_connection()
 
+    async def get_symbol_price(self, symbol: str) -> float:
+        return await self._service.get_symbol_price(symbol)
+
+    async def get_symbol_filters(
+        self, symbol: str, trading_type: str,
+    ) -> SymbolFilters:
+        return await self._service.get_symbol_filters(symbol, trading_type)
+
 
 class EventBusSymbolRepository:
     """Implementación que usa EventBus para solicitar símbolos."""
@@ -94,3 +107,13 @@ class EventBusSymbolRepository:
             )
         finally:
             await client.close_connection()
+
+    async def get_symbol_price(self, symbol: str) -> float:
+        from services.binance_service import binance_service
+        return await binance_service.get_symbol_price(symbol)
+
+    async def get_symbol_filters(
+        self, symbol: str, trading_type: str,
+    ) -> SymbolFilters:
+        from services.binance_service import binance_service
+        return await binance_service.get_symbol_filters(symbol, trading_type)

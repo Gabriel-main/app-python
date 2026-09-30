@@ -33,6 +33,14 @@ def test_binance_repo_clear_cache(mock_service):
     mock_service.clear_symbols_cache.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_binance_repo_get_symbol_price(mock_service):
+    mock_service.get_symbol_price = AsyncMock(return_value=84996.0)
+    repo = BinanceSymbolRepository(mock_service)
+    assert await repo.get_symbol_price("BTCUSDT") == 84996.0
+    mock_service.get_symbol_price.assert_awaited_once_with("BTCUSDT")
+
+
 # ---------------------------------------------------------------------------
 # get_max_leverage
 # ---------------------------------------------------------------------------

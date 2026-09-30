@@ -9,6 +9,8 @@ Muestra en tiempo real qué está haciendo el bot:
 Refactorizado para aplicar:
 - SRP + DIP: Usa AuditService para obtener eventos
 - PERFORMANCE: Usa update_batcher para un solo render
+- MODELO ≠ RENDER: `_events` almacena todo; el filtro se aplica al pintar.
+  El conteo sale del modelo (nunca de introspección sobre los widgets).
 """
 from __future__ import annotations
 
@@ -18,9 +20,15 @@ from core.event_bus import event_bus
 from core.events import AuditEvent
 from core.update_batcher import update_batcher
 from services.audit_service import audit_service
-from ui.components.audit_card import AuditCard
+from ui.components.audit_card import build_audit_card
+from ui.components.count_text import CountText
 from ui.components.empty_state import EmptyState
 from ui.components.view_header import ViewHeader
+
+# Tope del buffer en memoria: espejo de AuditService.max_events (200).
+# Con el store capado, la lista de tarjetas nunca supera este valor:
+# no hace falta recortar los `controls` en cada inserción.
+_MAX_EVENTS = 200
 
 # Categorías disponibles para filtro
 _CATEGORIES = [
@@ -57,7 +65,7 @@ class AuditView(ft.Column):
             on_select=self._on_filter_changed,
         )
 
-        self._event_count_text = ft.Text("0 eventos", size=11, color=ft.Colors.BLUE_GREY_400)
+        self._event_count_text = CountText("evento", "eventos")
 
         self._list_column = ft.Column(
             spacing=4,
@@ -91,7 +99,7 @@ class AuditView(ft.Column):
         # Cargar eventos existentes
         existing = audit_service.get_recent_events(100)
         for event in existing:
-            self._add_event_card(event)
+            self._add_event(event)
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(AuditEvent, self._on_audit_event)
@@ -100,22 +108,71 @@ class AuditView(ft.Column):
     # Event Handlers
     # ------------------------------------------------------------------
     async def _on_audit_event(self, event: AuditEvent) -> None:
-        self._add_event_card(event)
+        self._add_event(event)
 
-    def _add_event_card(self, event: AuditEvent) -> None:
-        """Agrega tarjeta de evento si pasa el filtro."""
-        if self._category_filter != "TODOS" and event.category != self._category_filter:
+    # ------------------------------------------------------------------
+    # Modelo (fuente de verdad) vs Render
+    # ------------------------------------------------------------------
+    def _matches(self, event: AuditEvent) -> bool:
+        """El filtro pertenece al render, nunca al almacenamiento."""
+        return (
+            self._category_filter == "TODOS"
+            or event.category == self._category_filter
+        )
+
+    def _visible_events(self) -> list[AuditEvent]:
+        """Eventos que el filtro actual debe mostrar."""
+        if self._category_filter == "TODOS":
+            return self._events
+        return [e for e in self._events if e.category == self._category_filter]
+
+    def _evict_overflow(self) -> bool:
+        """Recorta el buffer a `_MAX_EVENTS`.
+
+        Returns:
+            True si salió algún evento que estaba visible (y por lo tanto
+            su tarjeta también debe irse de la lista).
+        """
+        overflow = len(self._events) - _MAX_EVENTS
+        if overflow <= 0:
+            return False
+
+        evicted = self._events[:overflow]
+        del self._events[:overflow]
+
+        visible_dropped = sum(1 for e in evicted if self._matches(e))
+        evicted_visible = visible_dropped > 0
+        if evicted_visible:
+            controls = self._list_column.controls
+            # Invariante: el EmptyState vive siempre en controls[0] y las
+            # tarjetas se apilan en orden cronológico → la más antigua es [1].
+            while (
+                visible_dropped > 0
+                and len(controls) > 1
+                and controls[0] is self._empty_label
+            ):
+                del controls[1]
+                visible_dropped -= 1
+        return evicted_visible
+
+    def _add_event(self, event: AuditEvent) -> None:
+        """Almacena el evento y pinta su tarjeta solo si pasa el filtro.
+
+        Almacenar SIEMPRE es lo que permite cambiar de filtro sin perder
+        historial; el filtro es exclusivamente una decisión de render.
+        """
+        self._events.append(event)
+        evicted_visible = self._evict_overflow()
+
+        if not self._matches(event):
+            if evicted_visible:
+                self._update_count()
+                update_batcher.mark_dirty(self._list_column)
             return
 
-        self._events.append(event)
         if self._empty_label.visible:
             self._empty_label.visible = False
-        self._list_column.controls.append(AuditCard(event))
-
-        # Mantener máximo 200 tarjetas en UI
-        if len(self._list_column.controls) > 200:
-            self._list_column.controls = self._list_column.controls[-200:]
-
+        self._list_column.controls.append(build_audit_card(event))
         self._update_count()
         update_batcher.mark_dirty(self._list_column)
 
@@ -125,21 +182,15 @@ class AuditView(ft.Column):
         self._rebuild_list()
 
     def _rebuild_list(self) -> None:
-        """Reconstruye la lista de tarjetas según el filtro actual."""
-        if self._category_filter == "TODOS":
-            filtered = self._events
-        else:
-            filtered = [e for e in self._events if e.category == self._category_filter]
-        filtered = filtered[-200:]
-
-        self._empty_label.visible = not filtered
+        """Reconstruye la lista de tarjetas desde el modelo."""
+        visible = self._visible_events()
+        self._empty_label.visible = not visible
         self._list_column.controls = (
-            [self._empty_label] + [AuditCard(e) for e in filtered]
+            [self._empty_label] + [build_audit_card(e) for e in visible]
         )
-
         self._update_count()
         update_batcher.mark_dirty(self._list_column)
 
     def _update_count(self) -> None:
-        count = sum(1 for c in self._list_column.controls if isinstance(c, AuditCard))
-        self._event_count_text.value = f"{count} evento{'s' if count != 1 else ''}"
+        # Conteo desde el modelo: sin introspección de tipos sobre widgets
+        self._event_count_text.set_count(len(self._visible_events()))

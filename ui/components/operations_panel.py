@@ -28,6 +28,20 @@ def _format_time(seconds: float) -> str:
     return f"{mins}:{secs:02d}"
 
 
+def _operation_key(op: OperationState) -> tuple:
+    """Clave de diff de una operación: cambia si cambia id, estado o fill."""
+    return (op.order_id, op.state, op.entry_filled)
+
+
+def _has_pending_entry(op: OperationState) -> bool:
+    """True si la entrada LIMIT sigue working (sin posición y op no terminada).
+
+    En PAST la orden working ya fue cancelada (bot stop / timeframe), así que
+    no hay entrada pendiente que mostrar.
+    """
+    return not op.entry_filled and op.state != "PAST"
+
+
 def _operation_card(op: OperationState) -> ft.Container:
     """Construye una tarjeta para una operación individual."""
     side_fg, side_bg = SIDE_COLORS.get(op.side, (ft.Colors.WHITE, ft.Colors.GREY_800))
@@ -41,7 +55,7 @@ def _operation_card(op: OperationState) -> ft.Container:
         Badge(label=side_label, fg_color=side_fg, bg_color=side_bg),
         Badge(label=st_label, fg_color=st_fg, bg_color=st_bg, border_radius=4),
     ]
-    if not op.entry_filled:
+    if _has_pending_entry(op):
         # Orden LIMIT working: la entrada aún no llenó (sin posición real)
         badges.append(Badge(
             label="ENTRADA PENDIENTE",
@@ -193,10 +207,7 @@ class OperationsPanel(ft.Container):
             # Diff incremental: recrear si cambiaron los order_ids, el state
             # o el fill de entrada (sino el badge "ENTRADA PENDIENTE" no se
             # redibujaría: un cambio in-place con el mismo order_id)
-            new_keys = {
-                (op.order_id, op.state, op.entry_filled)
-                for op in self._operations
-            }
+            new_keys = {_operation_key(op) for op in self._operations}
             existing_keys = {
                 (
                     getattr(c, '_op_order_id', None),

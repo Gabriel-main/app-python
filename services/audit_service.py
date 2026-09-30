@@ -98,6 +98,65 @@ def _format_position_data(event: PositionUpdateEvent) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ChangedFilter: dejan pasar solo cuando algo relevante cambió (DRY)
+# ---------------------------------------------------------------------------
+_UNSET = object()
+
+
+class ChangedFilter:
+    """Predicate que descarta eventos cuyo valor derivado no cambió.
+
+    Evita que el ring buffer (maxlen=200) se llene de ruido de régimen
+    estable —el timer del timeframe o el PnL de una posición abierta— y
+    expulse los eventos que sí cuentan (órdenes, señales, conexión…).
+
+    OCP: es un `Callable` normal, así que entra en `HandlerConfig.filter`
+    sin cambiar el dispatch. SRP: solo decide si un evento es noticia.
+
+    Args:
+        value_of: Extrae el valor que debe cambiar para auditar.
+        id_of: Clave de identidad (p.ej. símbolo+lado de una posición).
+            Si se omite, el estado es global al tipo de evento.
+    """
+
+    def __init__(
+        self,
+        value_of: Callable[[Any], Any],
+        *,
+        id_of: Callable[[Any], Any] | None = None,
+    ) -> None:
+        self._value_of = value_of
+        self._id_of = id_of
+        self._state: dict[Any, Any] = {}
+
+    def __call__(self, event: Any) -> bool:
+        identity = self._id_of(event) if self._id_of else None
+        value = self._value_of(event)
+        if self._state.get(identity, _UNSET) == value:
+            return False
+        self._state[identity] = value
+        return True
+
+    def reset(self) -> None:
+        """Olvida el estado (para tests y reinicios)."""
+        self._state.clear()
+
+
+# Cambios que sí son noticia:
+# - OPERATION: estructura de operaciones (no el tick del timer, que se
+#   publica 1/s desde BotEngine._timeframe_loop).
+# - POSITION: apertura de posición (entry_price); el cierre ya lo auditan
+#   OrderExecutedEvent y StopLossEvent.
+_OPERATION_STRUCTURE = ChangedFilter(
+    lambda e: tuple((op.side, op.state, op.order_id) for op in e.operations)
+)
+_POSITION_OPEN = ChangedFilter(
+    lambda e: e.entry_price,
+    id_of=lambda e: (e.symbol, e.side),
+)
+
+
+# ---------------------------------------------------------------------------
 # Registry declarativo: cada EventType → configuración de transformación
 # ---------------------------------------------------------------------------
 
@@ -146,12 +205,14 @@ HANDLER_REGISTRY: dict[type, HandlerConfig] = {
     ),
     OperationUpdateEvent: HandlerConfig(
         category="OPERATION",
+        filter=_OPERATION_STRUCTURE,
         action=lambda e: "STATE_UPDATE",
         detail=_format_operation_detail,
         data=_format_operation_data,
     ),
     PositionUpdateEvent: HandlerConfig(
         category="POSITION",
+        filter=_POSITION_OPEN,
         action=lambda e: "PNL_UPDATE",
         detail=_format_position_detail,
         data=_format_position_data,

@@ -1,5 +1,5 @@
 """
-AuditCard — Tarjeta de evento de auditoría.
+build_audit_card — Tarjeta de evento de auditoría.
 
 Refactorizado para aplicar SRP:
 - Muestra un evento de auditoría con formato legible
@@ -31,7 +31,7 @@ CATEGORY_CONFIG: dict[str, dict] = {
 _DEFAULT_CONFIG = {"icon": ft.Icons.INFO, "color": ft.Colors.BLUE_GREY_400, "label": "INFO"}
 
 
-def AuditCard(event: AuditEvent) -> ft.Card:
+def build_audit_card(event: AuditEvent) -> ft.Card:
     """Construye una tarjeta de evento de auditoría."""
     config = CATEGORY_CONFIG.get(event.category, _DEFAULT_CONFIG)
 

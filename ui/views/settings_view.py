@@ -16,9 +16,10 @@ import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import BotStateChangedEvent, NavigateToEvent, SettingsUpdatedEvent
+from core.events import BotStateChangedEvent, NavigateToEvent, PriceTickEvent, SettingsUpdatedEvent
 from core.update_batcher import update_batcher
 from services.settings_persistence import EnvSettingsPersistence
+from services.trading_rules import QuantitySizer
 from ui.components.settings_sections import (
     ConfirmDialogHelper,
     OperationParamsSection,
@@ -27,6 +28,7 @@ from ui.components.settings_sections import (
     TradingModeSection,
     TradingTypeSection,
     validate_amount,
+    validate_limit_price,
     validate_stop_loss,
     validate_timeframe,
 )
@@ -59,13 +61,20 @@ class SettingsView(ft.Column):
         # --- Indicador de validación ---
         self._validation_indicator = SymbolValidationIndicator()
 
-        # --- Error de precio límite (ORDER_TYPE == LIMIT exige > 0) ---
+        # --- Error de precio límite (LIMIT exige > 0 y cercanía al mercado) ---
         self._limit_price_error = ft.Text(
-            "El precio límite debe ser mayor a 0.",
+            "",
             size=11,
             color=ft.Colors.RED_400,
             visible=False,
         )
+        # Último precio de mercado conocido — única referencia alimentada por
+        # PriceTickEvent, la usan la validación de LIMIT_PRICE y la de monto
+        self._market_price_ref: float = 0.0
+
+        # DIP: el mismo QuantitySizer que usa BotEngine — misma size_entry()
+        # para validar el monto aquí y para operar allá (DRY, cero duplicación)
+        self._sizer = QuantitySizer(symbol_repository)
 
         # --- Botón guardar ---
         self._save_btn = ft.FilledButton(
@@ -141,11 +150,52 @@ class SettingsView(ft.Column):
         # Validación proactiva al abrir (ej: FUTURES con monto < 50)
         self._update_save_button_state()
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
+        event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         # Consultar leverage máximo de Binance para el símbolo actual
         asyncio.create_task(self._refresh_max_leverage())
+        # Precio de referencia (LIMIT_PRICE) y filtros del exchange (monto)
+        asyncio.create_task(self._refresh_market_reference())
+        asyncio.create_task(self._refresh_sizer())
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
+        event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
+
+    async def _on_price_tick(self, event: PriceTickEvent) -> None:
+        """Mantiene fresco el precio de referencia (sin polling)."""
+        if event.symbol != self._params_section.get_symbol():
+            return
+        before = self._validation_signature()
+        self._market_price_ref = event.price
+        # Solo revalidar si alguna regla cambió de resultado: evita marcar
+        # el botón como dirty en cada tick del WebSocket.
+        if self._validation_signature() != before:
+            self._update_save_button_state()
+
+    async def _refresh_market_reference(self) -> None:
+        """Consulta el precio actual del símbolo del formulario (silencioso)."""
+        if not self._symbol_repository:
+            return
+        symbol = self._params_section.get_symbol()
+        try:
+            price = await self._symbol_repository.get_symbol_price(symbol)
+        except Exception:
+            price = 0.0
+        if symbol != self._params_section.get_symbol():
+            return  # el símbolo cambió durante la consulta: dato obsoleto
+        self._market_price_ref = price if price > 0 else 0.0
+        self._update_save_button_state()
+
+    async def _refresh_sizer(self) -> None:
+        """Carga los filtros del exchange (minQty/stepSize/minNotional)."""
+        if not self._symbol_repository:
+            return
+        symbol = self._params_section.get_symbol()
+        trading_type = self._type_section.get_trading_type()
+        await self._sizer.refresh(symbol, trading_type)
+        if symbol != self._params_section.get_symbol():
+            return  # el símbolo cambió durante la consulta: dato obsoleto
+        self._update_save_button_state()
 
     async def _on_bot_state_changed(self, event: BotStateChangedEvent) -> None:
         """Actualiza estado del bot y bloquea/desbloquea formulario."""
@@ -158,13 +208,17 @@ class SettingsView(ft.Column):
         self._mode_section.set_disabled(disabled)
         self._type_section.set_disabled(disabled)
         self._params_section.set_disabled(disabled)
+        limit_msg = self._limit_price_error_msg()
+        self._limit_price_error.value = limit_msg or ""
+        self._limit_price_error.visible = limit_msg is not None
         self._save_btn.disabled = (
             disabled
             or not self._has_changes()
-            or not self._is_limit_price_valid()
+            or limit_msg is not None
             or any(self._form_errors())
         )
         update_batcher.mark_dirty(self._save_btn)
+        update_batcher.mark_dirty(self._limit_price_error)
 
     # ------------------------------------------------------------------
     # Detección de cambios
@@ -190,29 +244,46 @@ class SettingsView(ft.Column):
         symbol_valid = not self._validation_indicator.visible or (
             self._validation_indicator._icon.color == ft.Colors.GREEN_400
         )
-        limit_valid = self._is_limit_price_valid()
-        self._limit_price_error.visible = not limit_valid
+        limit_msg = self._limit_price_error_msg()
+        self._limit_price_error.value = limit_msg or ""
+        self._limit_price_error.visible = limit_msg is not None
         errors = self._form_errors()
         self._params_section.set_validation_errors(*errors)
         self._save_btn.disabled = (
-            not has_changes or not symbol_valid or not limit_valid or any(errors)
+            not has_changes or not symbol_valid or limit_msg is not None or any(errors)
         )
         update_batcher.mark_dirty(self._save_btn)
         update_batcher.mark_dirty(self._limit_price_error)
 
-    def _is_limit_price_valid(self) -> bool:
-        """ORDER_TYPE == LIMIT exige LIMIT_PRICE > 0 (y parseable)."""
-        if self._type_section.get_order_type() != "LIMIT":
-            return True
-        return self._type_section.get_limit_price() > 0
+    def _limit_price_error_msg(self) -> str | None:
+        """Mensaje de error del precio límite, o None si es válido."""
+        return validate_limit_price(
+            self._type_section.get_limit_price(),
+            self._market_price_ref,
+            self._type_section.get_order_type(),
+        )
+
+    def _amount_error_msg(self) -> str | None:
+        """Error del monto: reglas base + sizing contra los filtros reales.
+
+        Sin precio de referencia todavía solo aplican las reglas base
+        (graceful degradation, igual que la validación de precio límite).
+        """
+        amount = self._params_section.get_amount()
+        trading_type = self._type_section.get_trading_type()
+        base = validate_amount(amount, trading_type)
+        if base is not None or self._market_price_ref <= 0:
+            return base
+        return self._sizer.size(amount, self._market_price_ref, trading_type).error
+
+    def _validation_signature(self) -> tuple[str | None, str | None]:
+        """Par (precio límite, monto) — detecta cambios de validez por tick."""
+        return (self._limit_price_error_msg(), self._amount_error_msg())
 
     def _form_errors(self) -> tuple[str | None, str | None, str | None]:
         """Errores de validación: (monto, stop loss, temporalidad)."""
         return (
-            validate_amount(
-                self._params_section.get_amount(),
-                self._type_section.get_trading_type(),
-            ),
+            self._amount_error_msg(),
             validate_stop_loss(
                 self._params_section.get_sl(),
                 self._params_section.get_sl_type(),
@@ -224,13 +295,21 @@ class SettingsView(ft.Column):
     # Validación de símbolo
     # ------------------------------------------------------------------
     def _on_symbol_changed_for_validation(self, symbol: str) -> None:
+        # El precio anterior ya no corresponde al símbolo editado
+        self._market_price_ref = 0.0
+        self._update_save_button_state()
         asyncio.create_task(self._validate_current_symbol())
         asyncio.create_task(self._refresh_max_leverage())
+        asyncio.create_task(self._refresh_market_reference())
+        # Los filtros (minQty/stepSize) también son por símbolo
+        asyncio.create_task(self._refresh_sizer())
 
     def _on_trading_type_changed_for_validation(self, trading_type: str) -> None:
         self._params_section.update_trading_type(trading_type)
         asyncio.create_task(self._validate_current_symbol())
         asyncio.create_task(self._refresh_max_leverage())
+        # Spot y Futures aplican filtros distintos
+        asyncio.create_task(self._refresh_sizer())
 
     def _on_currency_changed_for_reload(self, currency: str) -> None:
         if self._symbol_repository:
@@ -322,7 +401,9 @@ class SettingsView(ft.Column):
         if self._bot_active:
             self._show_bot_active_warning()
             return
-        if not self._is_limit_price_valid():
+        limit_msg = self._limit_price_error_msg()
+        if limit_msg is not None:
+            self._limit_price_error.value = limit_msg
             self._limit_price_error.visible = True
             update_batcher.mark_dirty(self._limit_price_error)
             return

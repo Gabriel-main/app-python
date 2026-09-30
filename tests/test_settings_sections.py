@@ -10,7 +10,9 @@ from ui.components.settings_sections import (
     TradingTypeSection,
     OperationParamsSection,
     ConfirmDialogHelper,
+    LIMIT_PRICE_MAX_DEVIATION_PCT,
     validate_amount,
+    validate_limit_price,
     validate_stop_loss,
     validate_timeframe,
 )
@@ -385,6 +387,54 @@ def test_validate_timeframe():
     assert validate_timeframe(5) is None
     assert validate_timeframe(0) is not None
     assert validate_timeframe(-1) is not None
+
+
+# ---------------------------------------------------------------------------
+# Validación de precio límite vs mercado — Opción B
+# ---------------------------------------------------------------------------
+def test_validate_limit_price_ignored_for_market_order():
+    assert validate_limit_price(100.0, 84996.0, "MARKET") is None
+    assert validate_limit_price(0.0, 0.0, "MARKET") is None
+
+
+def test_validate_limit_price_requires_positive():
+    err = validate_limit_price(0.0, 84996.0, "LIMIT")
+    assert err is not None and "mayor a 0" in err
+    assert validate_limit_price(-10.0, 84996.0, "LIMIT") is not None
+
+
+def test_validate_limit_price_without_reference_skips_proximity():
+    # Sin precio de mercado aún: solo aplica la regla > 0
+    assert validate_limit_price(100.0, 0.0, "LIMIT") is None
+    assert validate_limit_price(100.0, -1.0, "LIMIT") is None
+
+
+def test_validate_limit_price_within_threshold_ok():
+    ref = 84996.0
+    ok = ref * 1.04  # 4% por encima: dentro del umbral
+    assert validate_limit_price(ok, ref, "LIMIT") is None
+    # En los dos sentidos (BUY bajo / SELL alto)
+    assert validate_limit_price(ref * 0.97, ref, "LIMIT") is None
+    assert validate_limit_price(ref * 1.03, ref, "LIMIT") is None
+
+
+def test_validate_limit_price_too_far_returns_message():
+    ref = 84996.0
+    err = validate_limit_price(100.0, ref, "LIMIT")
+    assert err is not None
+    assert "100.0000" in err
+    assert "84,996.0000" in err
+    assert f"{LIMIT_PRICE_MAX_DEVIATION_PCT:g}%" in err
+    # Límite superior también inválido (SELL a 1000 cuando el mercado está en 85k)
+    assert validate_limit_price(1000.0, ref, "LIMIT") is not None
+
+
+def test_validate_limit_price_at_exact_threshold_is_valid():
+    ref = 100.0
+    inside = ref * (1 + LIMIT_PRICE_MAX_DEVIATION_PCT / 100.0) * 0.999
+    assert validate_limit_price(inside, ref, "LIMIT") is None
+    outside = ref * (1 + LIMIT_PRICE_MAX_DEVIATION_PCT / 100.0) * 1.001
+    assert validate_limit_price(outside, ref, "LIMIT") is not None
 
 
 def test_get_amount_safe_parse():

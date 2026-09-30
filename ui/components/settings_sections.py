@@ -15,6 +15,7 @@ import flet as ft
 
 from config.settings import settings
 from core.update_batcher import update_batcher
+from services.trading_rules import MIN_FUTURES_NOTIONAL, validate_amount
 from ui.components.api_key_manager import ApiKeyManager
 from ui.components.symbol_picker import SymbolPicker
 
@@ -749,19 +750,9 @@ class OperationParamsSection(ft.Container):
 # ---------------------------------------------------------------------------
 # Helpers: Validaciones del formulario (puros y testeables)
 # ---------------------------------------------------------------------------
-MIN_FUTURES_NOTIONAL = 50.0  # Regla Binance USDⓈ-M (error -4164)
-
-
-def validate_amount(amount: float, trading_type: str) -> str | None:
-    """Valida el monto de operación. Retorna mensaje de error o None."""
-    if amount <= 0:
-        return "El monto debe ser mayor a 0."
-    if trading_type == "FUTURES" and amount < MIN_FUTURES_NOTIONAL:
-        return (
-            f"En Futures el monto mínimo es {MIN_FUTURES_NOTIONAL:g} USDT "
-            "(notional de Binance)."
-        )
-    return None
+# SRP: `validate_amount` y `MIN_FUTURES_NOTIONAL` viven en
+# services/trading_rules (fuente única, compartida con BotEngine — DRY) y se
+# re-exportan desde aquí para no romper los imports existentes.
 
 
 def validate_stop_loss(sl: float, sl_type: str) -> str | None:
@@ -777,6 +768,33 @@ def validate_timeframe(tf: int) -> str | None:
     """Valida la temporalidad. Retorna mensaje de error o None."""
     if tf < 1:
         return "La temporalidad debe ser al menos 1."
+    return None
+
+
+# Desviación máxima permitida entre LIMIT_PRICE y el precio de mercado.
+# El mismo precio alimenta las entradas BUY y SELL, así que solo un precio
+# cercano al mercado es alcanzable en ambas direcciones.
+LIMIT_PRICE_MAX_DEVIATION_PCT: float = 5.0
+
+
+def validate_limit_price(
+    limit_price: float, reference_price: float, order_type: str,
+) -> str | None:
+    """Valida el precio límite contra el mercado. Retorna mensaje o None."""
+    if order_type != "LIMIT":
+        return None
+    if limit_price <= 0:
+        return "El precio límite debe ser mayor a 0."
+    if reference_price <= 0:
+        # Sin precio de referencia todavía: solo aplica la regla > 0
+        return None
+    deviation = abs(limit_price - reference_price) / reference_price * 100.0
+    if deviation > LIMIT_PRICE_MAX_DEVIATION_PCT:
+        return (
+            f"El precio límite (${limit_price:,.4f}) está a {deviation:.1f}% del "
+            f"mercado (${reference_price:,.4f}). Debe estar dentro de "
+            f"{LIMIT_PRICE_MAX_DEVIATION_PCT:g}% para que la orden pueda llenarse."
+        )
     return None
 
 

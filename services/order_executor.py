@@ -82,12 +82,19 @@ def build_order_params(request: OrderRequest) -> dict:
 
     Única fuente de verdad del payload enviado a Binance: type,
     price, timeInForce y newClientOrderId.
+
+    `newOrderRespType=RESULT` (válido en Spot/Futures/Margin) hace que el
+    exchange devuelva la orden completa: `status=FILLED` y `avgPrice` para
+    una MARKET. Sin él, el ACK de Futures responde `status=NEW` y la orden
+    quedaría registrada como "working" con price=0 — `is_limit_crossed`
+    nunca la llenaría (violación del contrato de OrderExecutor.execute).
     """
     params: dict = {
         "symbol": request.symbol,
         "side": request.side,
         "quantity": request.quantity,
         "newClientOrderId": request.client_order_id,
+        "newOrderRespType": "RESULT",
     }
     if request.order_type == "LIMIT":
         params.update({
@@ -214,6 +221,15 @@ class LiveExecutor(OrderExecutor):
             status = "NEW"
 
         fill_price = self._extract_fill_price(response, request)
+
+        if request.order_type == "MARKET" and status != "FILLED":
+            # Contrato de OrderExecutor.execute (LSP): una MARKET siempre
+            # retorna FILLED. Con newOrderRespType=RESULT no debería ocurrir.
+            log.error(
+                "[LIVE] MARKET %s %s returned %s instead of FILLED",
+                request.side, request.client_order_id, exchange_status,
+            )
+
         log.info(
             "[LIVE] %s %s %.6f %s -> %s (exchange=%s) @ %.4f",
             request.side, request.symbol, request.quantity,

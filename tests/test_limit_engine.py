@@ -11,14 +11,19 @@ from core.events import (
     InitialOrderEvent,
     OrderCanceledEvent,
     OrderExecutedEvent,
+    OrderFailedEvent,
     OrderPlacedEvent,
     SettingsUpdatedEvent,
 )
 from services.bot_engine import BotEngine, TradingOperation
 from services.order_executor import PaperExecutor
+from services.trading_rules import QuantitySizer, SymbolFilters
 
 
-def _make_settings(order_type="LIMIT", limit_price=65000.0, mode="PAPER"):
+def _make_settings(
+    order_type="LIMIT", limit_price=65000.0, mode="PAPER",
+    trade_amount=10.0,
+):
     m = MagicMock()
     m.ORDER_TYPE = order_type
     m.LIMIT_PRICE = limit_price
@@ -26,7 +31,11 @@ def _make_settings(order_type="LIMIT", limit_price=65000.0, mode="PAPER"):
     m.TRADING_SYMBOL = "BTCUSDT"
     m.TRADING_TYPE = "SPOT"
     m.LEVERAGE = 1
-    m.TRADE_AMOUNT = 10.0
+    m.TRADE_AMOUNT = trade_amount
+    m.STOP_LOSS = 1.01
+    m.STOP_LOSS_TYPE = "PERCENT"
+    m.TIMEFRAME = 1
+    m.TIMEFRAME_UNIT = "MINUTES"
 
     # Comportamiento real de `settings.from_event`: si no, el mock nunca
     # refleja los nuevos valores y no se puede asertar el límite re-colocado.
@@ -58,8 +67,31 @@ def _make_op(side="BUY", state="ACTIVE", entry_filled=False):
     )
 
 
-def _engine():
-    return BotEngine(executor=PaperExecutor())
+def _engine(sizer=None):
+    return BotEngine(executor=PaperExecutor(), sizer=sizer)
+
+
+class _StubFiltersProvider:
+    """Filtros de exchange falsos para inyectar en QuantitySizer (DIP)."""
+
+    def __init__(self, filters: SymbolFilters) -> None:
+        self._filters = filters
+
+    async def get_symbol_filters(self, symbol: str, trading_type: str):
+        return self._filters
+
+
+async def _sizer_with(filters: SymbolFilters) -> QuantitySizer:
+    sizer = QuantitySizer(_StubFiltersProvider(filters))
+    await sizer.refresh("BTCUSDT", "SPOT")
+    return sizer
+
+
+# BTCUSDT FUTURES reales: minQty/stepSize 0.001, minNotional 50
+_FUT_FILTERS = SymbolFilters(
+    symbol="BTCUSDT", min_qty=0.001, step_size=0.001,
+    min_notional=50.0, tick_size=0.10,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -482,3 +514,216 @@ async def test_execute_initial_orders_emits_initial_order_event_on_fill():
         assert initials[0].side == "BUY"
         assert active.entry_filled is True
         assert pending.entry_filled is False
+
+
+# ---------------------------------------------------------------------------
+# F4 — Sizing: la única puerta de validación de la cantidad
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_trading_blocks_when_quantity_not_operable():
+    """El bug original: 50 USDT / 65k = 0.000767 < minQty 0.001 → el bot no arranca."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=50.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is False
+        assert engine._operations == []
+        failed = _published(bus, OrderFailedEvent)
+        assert len(failed) == 1
+        assert failed[0].operation_id == "STARTUP"
+        assert "0.001" in failed[0].error
+
+
+@pytest.mark.asyncio
+async def test_start_trading_uses_floored_quantity():
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is True
+        assert len(engine._operations) == 2
+        # floor(1000 / 65192.32, 0.001) — no el float crudo
+        assert engine._operations[0].quantity == 0.015
+        assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_calculate_quantity_floors_to_step():
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)):
+        assert engine._calculate_quantity(65192.32) == 0.015
+
+
+@pytest.mark.asyncio
+async def test_calculate_quantity_zero_when_not_operable():
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=50.0)):
+        assert engine._calculate_quantity(65192.32) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_calculate_quantity_fail_open_without_filters():
+    engine = _engine()   # QuantitySizer sin provider → filtros desconocidos
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=50.0)):
+        await engine._sizer.refresh("BTCUSDT", "SPOT")
+        assert engine._calculate_quantity(65192.32) == pytest.approx(50.0 / 65192.32)
+
+
+def test_insert_pending_skips_zero_quantity():
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus"):
+        active = _make_op(side="BUY", state="ACTIVE", entry_filled=True)
+        active.stop_loss = 64900.0
+        engine._operations = [active]
+
+        engine._insert_pending_if_needed(64000.0, 640.0, 0.0)   # no operable
+        assert len(engine._operations) == 1
+
+        engine._insert_pending_if_needed(64000.0, 640.0, 0.001)  # operable
+        assert len(engine._operations) == 2
+
+
+@pytest.mark.asyncio
+async def test_timeframe_tick_keeps_existing_quantity_when_sizing_fails():
+    """Si el precio se movió y el sizing falla, la PENDING no se crea con 0."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=50.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._active = True
+        engine._current_price = 65192.32
+        active = _make_op(side="BUY", state="ACTIVE", entry_filled=True)
+        engine._operations = [active]
+
+        await engine._on_timeframe_tick()
+
+        assert len(engine._operations) == 2
+        assert engine._operations[1].quantity == active.quantity
+
+
+# ---------------------------------------------------------------------------
+# F5 — Auto-sanado de la ENTRY (event-driven, con cooldown y tope)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_order_failed_heals_orphan_entry():
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]          # huérfana: sin orden working
+
+        await engine._on_order_failed(
+            OrderFailedEvent(operation_id="OC-TEST01", side="BUY", error="boom")
+        )
+
+        assert len(engine._working_orders) == 1
+        assert engine._heal_attempts == 1
+        # El refill LIMIT no cruzado queda como orden working (OrderPlaced)
+        assert len(_published(bus, OrderPlacedEvent)) == 1
+
+
+@pytest.mark.asyncio
+async def test_order_failed_respects_cooldown():
+    """Un segundo fallo dentro del cooldown no vuelve a despachar (sin bucle)."""
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]
+        event = OrderFailedEvent(operation_id="OC-TEST01", side="BUY", error="boom")
+
+        await engine._on_order_failed(event)
+        assert len(engine._working_orders) == 1
+
+        engine._working_orders.clear()             # simular que sigue fallando
+        await engine._on_order_failed(event)
+
+        assert engine._working_orders == {}        # cooldown lo bloqueó
+        assert engine._heal_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_order_failed_ignored_when_paused():
+    engine = _engine()   # _active False por defecto
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]
+
+        await engine._on_order_failed(
+            OrderFailedEvent(operation_id="OC-TEST01", side="BUY", error="boom")
+        )
+
+        assert engine._working_orders == {}
+        assert engine._heal_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_order_failed_ignored_for_startup_sizing_error():
+    """STARTUP es fallo de sizing: no hay operación que sanar (evita bucle)."""
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]
+
+        await engine._on_order_failed(
+            OrderFailedEvent(operation_id="STARTUP", side="BUY", error="muy chico")
+        )
+
+        assert engine._working_orders == {}
+        assert engine._heal_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_order_failed_stops_after_max_attempts():
+    engine = _engine()
+    engine._active = True
+    engine._heal_attempts = engine._MAX_HEAL_ATTEMPTS
+    engine._last_heal_at = 0.0
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]
+
+        await engine._on_order_failed(
+            OrderFailedEvent(operation_id="OC-TEST01", side="BUY", error="boom")
+        )
+
+        assert engine._working_orders == {}
+        assert engine._heal_attempts == engine._MAX_HEAL_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_successful_entry_resets_heal_attempts():
+    engine = _engine()
+    engine._heal_attempts = 3
+    with patch("services.bot_engine.settings", _make_settings(order_type="MARKET", limit_price=0.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        op = _make_op()
+
+        result = await engine._dispatch_order(op, purpose="ENTRY")
+
+        assert result is not None
+        assert op.entry_filled is True
+        assert engine._heal_attempts == 0

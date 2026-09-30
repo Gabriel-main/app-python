@@ -33,6 +33,7 @@ from core.events import (
 )
 from config.settings import settings
 from database.db_queue import db_queue
+from services.trading_rules import SymbolFilters
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,10 @@ class BinanceService:
         # Cache de símbolos (por mercado + moneda)
         self._symbols_cache: dict[str, list[dict]] = {}
         self._symbols_cache_time: dict[str, float] = {}
+
+        # Cache de filtros de exchange (minQty/stepSize/minNotional)
+        self._filters_cache: dict[str, SymbolFilters] = {}
+        self._filters_cache_time: dict[str, float] = {}
 
         # Cache de saldo
         self._balance_cache: BalanceUpdateEvent | None = None
@@ -556,9 +561,11 @@ class BinanceService:
     # ------------------------------------------------------------------
 
     def clear_symbols_cache(self) -> None:
-        """Limpia el caché de símbolos para forzar recarga."""
+        """Limpia el caché de símbolos (y filtros) para forzar recarga."""
         self._symbols_cache = {}
         self._symbols_cache_time = {}
+        self._filters_cache = {}
+        self._filters_cache_time = {}
 
     async def get_trading_symbols(self, trading_type: str = "SPOT", currency: str | None = None) -> list[dict]:
         """Obtiene símbolos disponibles (USDT/USDC) con precios actuales.
@@ -641,6 +648,48 @@ class BinanceService:
                     await client.close_connection()
                 except Exception:
                     pass
+
+    async def get_symbol_filters(
+        self, symbol: str, trading_type: str = "SPOT",
+    ) -> SymbolFilters:
+        """Filtros LOT_SIZE/NOTIONAL del símbolo (cache 60s, fail-open).
+
+        SRP: único punto que lee exchangeInfo para sizing. Si falla devuelve
+        `SymbolFilters.unknown()` — el caller decide (fail-open, no bloquea).
+        """
+        from services.binance_client import create_client
+
+        key = f"{trading_type}:{symbol.upper()}"
+        now = time.time()
+        cached = self._filters_cache.get(key)
+        if cached is not None and (now - self._filters_cache_time.get(key, 0.0)) < 60.0:
+            return cached
+
+        client = None
+        try:
+            client = await create_client()
+            if trading_type == "FUTURES":
+                info = await client.futures_exchange_info()
+            else:
+                info = await client.get_exchange_info()
+            filters = SymbolFilters.from_exchange_info(info, symbol)
+        except Exception as exc:
+            log.warning("Failed to fetch symbol filters for %s: %s", key, exc)
+            return SymbolFilters.unknown(symbol.upper())
+        finally:
+            if client:
+                try:
+                    await client.close_connection()
+                except Exception:
+                    pass
+
+        if filters is None:
+            log.warning("No filters found for %s in %s", symbol, trading_type)
+            return SymbolFilters.unknown(symbol.upper())
+
+        self._filters_cache[key] = filters
+        self._filters_cache_time[key] = now
+        return filters
 
     # ------------------------------------------------------------------
     # Consulta de saldo (Account Balance)

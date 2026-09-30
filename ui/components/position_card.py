@@ -1,5 +1,5 @@
 """
-PositionCard — Tarjeta de posición abierta (Futures/Margin).
+build_position_card — Tarjeta de posición abierta (Futures/Margin).
 
 Refactorizado para aplicar DRY:
 - Usa TRADING_TYPE_COLORS de colors.py
@@ -11,7 +11,7 @@ import flet as ft
 from ui.components.colors import TRADING_TYPE_COLORS
 
 
-def PositionCard(position: dict) -> ft.Card:
+def build_position_card(position: dict) -> ft.Card:
     """Construye una tarjeta de posición. `position` es un dict con campos de Position."""
 
     side = position.get("side", "LONG")

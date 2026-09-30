@@ -14,7 +14,8 @@ import flet as ft
 from core.event_bus import event_bus
 from core.events import PositionUpdateEvent
 from core.update_batcher import update_batcher
-from ui.components.position_card import PositionCard
+from ui.components.count_text import CountText
+from ui.components.position_card import build_position_card
 from ui.components.empty_state import EmptyState
 
 
@@ -31,7 +32,7 @@ class PositionsPanel(ft.Container):
             icon=ft.Icons.SHOW_CHART_OUTLINED,
             title_size=12,
         )
-        self._count_text = ft.Text("0 posiciones", size=11, color=ft.Colors.BLUE_GREY_400)
+        self._count_text = CountText("posición", "posiciones")
         self._total_pnl_text = ft.Text(
             "PnL Total: $0.00",
             size=12,
@@ -105,7 +106,7 @@ class PositionsPanel(ft.Container):
             if new_keys != existing_keys:
                 self._positions_column.controls.clear()
                 for pos in self._positions.values():
-                    card = PositionCard(pos)
+                    card = build_position_card(pos)
                     card._pos_key = f"{pos['symbol']}_{pos['side']}"
                     self._positions_column.controls.append(card)
 
@@ -117,11 +118,9 @@ class PositionsPanel(ft.Container):
             self._total_pnl_text.value = f"PnL Total: {sign}${total_pnl:.2f}"
             self._total_pnl_text.color = pnl_color
 
-        count = len(self._positions)
-        self._count_text.value = f"{count} posición{'es' if count != 1 else ''}"
+        self._count_text.set_count(len(self._positions))
 
         # Batch update: un solo render
         update_batcher.mark_dirty(self._positions_column)
-        update_batcher.mark_dirty(self._count_text)
         update_batcher.mark_dirty(self._total_pnl_text)
         update_batcher.mark_dirty(self._empty_text)

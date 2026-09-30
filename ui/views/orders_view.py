@@ -21,6 +21,7 @@ import flet as ft
 from core.event_bus import event_bus
 from core.events import OrderCanceledEvent, OrderExecutedEvent, OrderPlacedEvent
 from core.update_batcher import update_batcher
+from ui.components.count_text import CountText
 from ui.components.empty_state import EmptyState
 from ui.components.order_card import OrderCard
 from ui.components.segmented_filter import SegmentedFilter
@@ -56,7 +57,7 @@ class OrdersView(ft.Column):
 
         self._list_column = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
         self._loading_ring = ft.ProgressRing(width=32, height=32, stroke_width=3)
-        self._count_text = ft.Text("0 órdenes", size=11, color=ft.Colors.BLUE_GREY_400)
+        self._count_text = CountText("orden", "órdenes")
         self._filter_control = SegmentedFilter(
             _FILTERS, value="ALL", on_change=self._on_filter_changed
         )
@@ -242,7 +243,6 @@ class OrdersView(ft.Column):
         self._recount_orders()
         self._show_body()
         update_batcher.mark_dirty(self._list_column)
-        update_batcher.mark_dirty(self._count_text)
 
     @staticmethod
     def _sync_card(card: OrderCard, record: dict, *, flash: bool) -> None:
@@ -255,8 +255,8 @@ class OrdersView(ft.Column):
             card.set_pnl(record["pnl"])
 
     def _recount_orders(self) -> None:
-        count = len(self._list_column.controls)
-        self._count_text.value = f"{count} {'orden' if count == 1 else 'órdenes'}"
+        # CountText pluraliza y se repinta solo si el número cambió (DRY)
+        self._count_text.set_count(len(self._list_column.controls))
 
     def _show_body(self) -> None:
         """Muestra exactamente un estado (loading / lista / vacío / error)."""

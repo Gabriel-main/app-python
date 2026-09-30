@@ -65,6 +65,20 @@ def test_build_order_params_limit():
     assert params["newClientOrderId"] == "LIVE-DEF"
 
 
+def test_build_order_params_requests_full_response():
+    """RESULT hace que Futures devuelva status=FILLED + avgPrice para MARKET.
+
+    Sin esto el ACK responde status=NEW y la orden quedaría registrada como
+    working con price=0 (violación del contrato de OrderExecutor.execute).
+    """
+    for order_type, price in (("MARKET", 0.0), ("LIMIT", 65000.0)):
+        req = OrderRequest(
+            symbol="BTCUSDT", side="BUY", quantity=0.001,
+            order_type=order_type, price=price, client_order_id="LIVE-XYZ",
+        )
+        assert build_order_params(req)["newOrderRespType"] == "RESULT"
+
+
 # ---------------------------------------------------------------------------
 # PaperExecutor.execute
 # ---------------------------------------------------------------------------

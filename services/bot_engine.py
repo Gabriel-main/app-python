@@ -54,6 +54,7 @@ from services.order_executor import (
     is_limit_crossed,
 )
 from services.pnl_calculator import PnLCalculator
+from services.trading_rules import QuantitySizer
 
 log = logging.getLogger(__name__)
 
@@ -152,11 +153,27 @@ class BotEngine:
     # Throttle: delta mínimo de PnL para forzar update
     _POSITION_PNL_DELTA_THRESHOLD: float = 0.001  # 0.1%
 
-    def __init__(self, executor: OrderExecutor | None = None) -> None:
+    # Auto-sanado de ENTRY fallida (F5): rompe el bucle fail→heal→fail y
+    # evita spamear toasts al usuario.
+    _HEAL_COOLDOWN_S: float = 5.0
+    _MAX_HEAL_ATTEMPTS: int = 5
+
+    def __init__(
+        self,
+        executor: OrderExecutor | None = None,
+        sizer: QuantitySizer | None = None,
+    ) -> None:
         self._running: bool = False
         self._active: bool = False
         self._current_price: float = 0.0
         self._executor: OrderExecutor | None = executor  # Se crea en start() (Fase 3)
+
+        # DIP: sizing inyectado — la UI y el motor comparten size_entry() (DRY)
+        self._sizer: QuantitySizer = sizer or QuantitySizer()
+
+        # Auto-sanado de la ENTRY (F5): cooldown + tope de intentos
+        self._last_heal_at: float = 0.0
+        self._heal_attempts: int = 0
 
         # Operaciones
         self._operations: list[TradingOperation] = []
@@ -204,10 +221,14 @@ class BotEngine:
         if self._executor is None:
             self._executor = create_executor(settings.TRADING_MODE)
 
+        # Filtros del exchange para dimensionar la entrada (fail-open si falla)
+        await self._sizer.refresh(settings.TRADING_SYMBOL, settings.TRADING_TYPE)
+
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.subscribe(OrderFillEvent, self._on_order_fill)
+        event_bus.subscribe(OrderFailedEvent, self._on_order_failed)
 
         # Publicar estado inicial después de que la UI se suscriba
         asyncio.create_task(self._publish_initial_state(), name="initial_state")
@@ -335,6 +356,10 @@ class BotEngine:
 
         settings.from_event(event)
 
+        # Símbolo/mercado pueden haber cambiado: refrescar filtros antes de
+        # recolocar (F4) — si falla, _sizer queda fail-open.
+        await self._sizer.refresh(settings.TRADING_SYMBOL, settings.TRADING_TYPE)
+
         # Recrear executor si PAPER ↔ LIVE cambió
         if event.mode != old_mode and self._executor is not None:
             await self._executor.close()
@@ -364,6 +389,47 @@ class BotEngine:
         # con los settings recién aplicados (si no, el bot queda muerto: sin
         # fill no hay SL, sin SL no hay promoción).
         await self._heal_orphan_entry()
+        self._reset_heal_state()  # el usuario intervino: nuevos intentos
+
+    # ------------------------------------------------------------------
+    # Auto-sanado de ENTRY (F5 — event-driven, sin polling)
+    # ------------------------------------------------------------------
+    async def _on_order_failed(self, event: OrderFailedEvent) -> None:
+        """Recoloca la ENTRY cuando una orden de entrada falla.
+
+        Reutiliza `_heal_orphan_entry()` (DRY) en vez de duplicar la lógica de
+        recolocación. El bucle fail→heal→fail se rompe con cooldown + tope de
+        intentos: al agotarlos se emite UN `log.error` y se deja de reintentar.
+        """
+        if not self._active:
+            return  # bot pausado: al arrancar `_start_trading` despacha fresco
+        if event.operation_id == "STARTUP":
+            return  # fallo de sizing — no hay operación que sanar
+
+        now = time.time()
+        if now - self._last_heal_at < self._HEAL_COOLDOWN_S:
+            return
+        if self._heal_attempts >= self._MAX_HEAL_ATTEMPTS:
+            return  # ya se agotó (el log.error único se emitió al llegar al tope)
+
+        self._last_heal_at = now
+        self._heal_attempts += 1
+        log.warning(
+            "Order failed (%s) — healing ENTRY (%d/%d)",
+            event.error, self._heal_attempts, self._MAX_HEAL_ATTEMPTS,
+        )
+        if self._heal_attempts >= self._MAX_HEAL_ATTEMPTS:
+            log.error(
+                "ENTRY heal limit reached (%d) — stopping retries until a "
+                "successful fill or a bot restart",
+                self._heal_attempts,
+            )
+        await self._heal_orphan_entry()
+
+    def _reset_heal_state(self) -> None:
+        """Reinicia el contador de reintentos (fill exitoso o sesión nueva)."""
+        self._heal_attempts = 0
+        self._last_heal_at = 0.0
 
     # ------------------------------------------------------------------
     # Indicador visual: MA Crossover (no afecta operaciones OC/OV)
@@ -474,7 +540,21 @@ class BotEngine:
 
         pa = self._current_price
         sl_dist = self._calculate_sl_distance(pa)
-        quantity = self._calculate_quantity(pa)
+
+        # F4: única puerta de validación de sizing — si la cantidad no es
+        # operable el bot no arranca (el toast explica cuánto falta).
+        sized = self._sizer.size(settings.TRADE_AMOUNT, pa, settings.TRADING_TYPE)
+        if not sized.ok:
+            log.error("Cannot size entry: %s", sized.error)
+            event_bus.publish(OrderFailedEvent(
+                operation_id="STARTUP",
+                side="BUY",
+                error=sized.error,
+                mode=settings.TRADING_MODE,
+            ))
+            return False
+        quantity = sized.quantity
+        self._reset_heal_state()
 
         buy_op = self._create_operation("BUY", "ACTIVE", pa, sl_dist, quantity)
         sell_op = self._create_operation("SELL", "PENDING", pa, sl_dist, quantity)
@@ -536,10 +616,16 @@ class BotEngine:
             return settings.STOP_LOSS
 
     def _calculate_quantity(self, pa: float) -> float:
-        """Calcula la cantidad a operar basada en TRADE_AMOUNT y precio actual."""
+        """Cantidad operable (alineada a stepSize) — delega en size_entry (DRY).
+
+        Retorna 0.0 cuando no es operable: los call sites de ticks no crean
+        operaciones nuevas en vez de arrastrar una cantidad inválida.
+        """
         if pa <= 0:
             return 0.0
-        return settings.TRADE_AMOUNT / pa
+        return self._sizer.size(
+            settings.TRADE_AMOUNT, pa, settings.TRADING_TYPE,
+        ).quantity
 
     # ------------------------------------------------------------------
     # Helpers de operaciones (SRP + DRY)
@@ -592,6 +678,8 @@ class BotEngine:
         
         Solo se inserta si no existe ya una PENDING del mismo lado.
         """
+        if quantity <= 0:
+            return  # sizing no operable: no crear ops con cantidad 0
         pending_sides = {op.side for op in self._operations if op.state == "PENDING"}
 
         for op in self._operations:
@@ -680,6 +768,11 @@ class BotEngine:
         if active_op is None:
             log.warning("No ACTIVE operation found during timeframe tick")
             return
+
+        # Sizing no operable en este tick (precio se movió): la PENDING nueva
+        # reutiliza la cantidad de la ACTIVE en vez de crearse con 0.
+        if quantity <= 0:
+            quantity = active_op.quantity
 
         # 2. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
         self._update_sl_on_tick(active_op, pa, sl_dist)
@@ -921,6 +1014,10 @@ class BotEngine:
             working (LIMIT NEW — el fill llega después por OrderFillEvent).
         """
         if self._executor is None:
+            log.error(
+                "Order not dispatched: executor not initialized (operation=%s)",
+                op.order_id,
+            )
             event_bus.publish(OrderFailedEvent(
                 operation_id=op.order_id,
                 side=op.side,
@@ -977,6 +1074,7 @@ class BotEngine:
 
         if purpose == "ENTRY":
             op.entry_filled = True
+            self._reset_heal_state()  # entrada ok: los reintentos vuelven a 0
 
         order_event = self._build_order_event(op, placement, request, purpose)
         event_bus.publish(order_event)
@@ -1012,6 +1110,7 @@ class BotEngine:
         op = working.operation
         if op.state != "PAST":
             op.entry_filled = True
+            self._reset_heal_state()  # entrada ok: los reintentos vuelven a 0
         else:
             log.warning(
                 "Fill for PAST operation %s — position tracked by balance",
