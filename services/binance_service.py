@@ -26,6 +26,7 @@ from core.events import (
     ConnectionStatusEvent,
     ConnectionStatusRequestEvent,
     ConnectionStatusSnapshotEvent,
+    OrderFillEvent,
     PriceTickEvent,
     SettingsUpdatedEvent,
     SymbolsListEvent,
@@ -89,6 +90,7 @@ class BinanceService:
     def __init__(self) -> None:
         self._running: bool = False
         self._stream_task: asyncio.Task | None = None
+        self._user_stream_task: asyncio.Task | None = None
         self._client = None
         self._mock = MockTickGenerator()
         self._retry_count: int = 0
@@ -118,16 +120,37 @@ class BinanceService:
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
         self._stream_task = asyncio.create_task(
-            self._run_with_reconnect(), name="binance_stream"
+            self._run_with_reconnect(self._run_ticker_stream), name="binance_stream"
         )
+        self._start_user_stream()
         self._start_balance_loop()
         log.info("BinanceService starting for symbol: %s", settings.TRADING_SYMBOL)
+
+    def _start_user_stream(self) -> None:
+        """Arranca el user data stream solo en LIVE con API keys (Q3a)."""
+        if not (settings.TRADING_MODE == "LIVE" and settings.has_api_keys()):
+            return
+        self._user_stream_task = asyncio.create_task(
+            self._run_with_reconnect(self._run_user_stream, publish_status=False),
+            name="binance_user_stream",
+        )
+        log.info("User data stream task started (%s)", settings.TRADING_TYPE)
+
+    async def _stop_user_stream(self) -> None:
+        if self._user_stream_task:
+            self._user_stream_task.cancel()
+            try:
+                await self._user_stream_task
+            except asyncio.CancelledError:
+                pass
+            self._user_stream_task = None
 
     async def stop(self) -> None:
         self._running = False
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.unsubscribe(ConnectionStatusRequestEvent, self._on_status_request)
         self._stop_balance_loop()
+        await self._stop_user_stream()
         if self._stream_task:
             self._stream_task.cancel()
             try:
@@ -166,54 +189,83 @@ class BinanceService:
         self._running = True
         self._retry_count = 0
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+        # Fix: stop() desuscribe ConnectionStatusRequestEvent — re-suscribir
+        # aquí, si no, cualquier cambio de settings rompe el snapshot del
+        # ConnectionIndicator.
+        event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
         self._start_balance_loop()
         self._stream_task = asyncio.create_task(
-            self._run_with_reconnect(), name="binance_stream"
+            self._run_with_reconnect(self._run_ticker_stream), name="binance_stream"
         )
+        self._start_user_stream()
 
     # ------------------------------------------------------------------
     # Loop con reconexión automática (backoff exponencial)
     # ------------------------------------------------------------------
 
-    async def _run_with_reconnect(self) -> None:
+    async def _run_ticker_stream(self) -> None:
+        """Selecciona live/mock según modo y keys (un solo punto de ramificación)."""
+        if settings.TRADING_MODE == "LIVE" and settings.has_api_keys():
+            await self._run_live_stream()
+        else:
+            await self._run_mock_stream()
+
+    async def _run_with_reconnect(
+        self,
+        runner,
+        *,
+        publish_status: bool = True,
+    ) -> None:
+        """Loop de reconexión genérico (DRY) para ticker y user stream.
+
+        Cada task mantiene su propio contador de reintentos (los loops no
+        interfieren entre sí). `publish_status=False` evita que el user
+        stream pise el estado de conexión del ticker en la UI.
+        """
+        retry = 0
         while self._running:
             try:
-                self._connection_status = "CONNECTING"
-                event_bus.publish(ConnectionStatusEvent(
-                    status="CONNECTING",
-                    message=f"Conectando a {settings.TRADING_SYMBOL}..."
-                ))
-                if settings.TRADING_MODE == "LIVE" and settings.has_api_keys():
-                    await self._run_live_stream()
-                else:
-                    await self._run_mock_stream()
+                if publish_status:
+                    self._connection_status = "CONNECTING"
+                    event_bus.publish(ConnectionStatusEvent(
+                        status="CONNECTING",
+                        message=f"Conectando a {settings.TRADING_SYMBOL}..."
+                    ))
+                await runner()
                 # Si llegamos aquí es porque el stream terminó normalmente
-                self._retry_count = 0
+                retry = 0
 
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._retry_count += 1
+                retry += 1
+                if publish_status:
+                    self._retry_count = retry
                 delay = min(
-                    settings.RECONNECT_BASE_DELAY ** self._retry_count,
+                    settings.RECONNECT_BASE_DELAY ** retry,
                     60.0
                 )
                 log.error(
-                    "BinanceService error (retry %d): %s. Waiting %.1fs...",
-                    self._retry_count, exc, delay
+                    "%s error (retry %d): %s. Waiting %.1fs...",
+                    getattr(runner, "__name__", "stream"), retry, exc, delay
                 )
-                self._connection_status = "RECONNECTING"
-                event_bus.publish(ConnectionStatusEvent(
-                    status="RECONNECTING",
-                    message=f"Reintentando en {delay:.0f}s... (intento {self._retry_count})"
-                ))
-                if self._retry_count > settings.RECONNECT_MAX_RETRIES:
-                    log.critical("Max retries exceeded. Stopping BinanceService.")
-                    self._connection_status = "DISCONNECTED"
+                if publish_status:
+                    self._connection_status = "RECONNECTING"
                     event_bus.publish(ConnectionStatusEvent(
-                        status="DISCONNECTED",
-                        message="Máximo de reintentos alcanzado."
+                        status="RECONNECTING",
+                        message=f"Reintentando en {delay:.0f}s... (intento {retry})"
                     ))
+                if retry > settings.RECONNECT_MAX_RETRIES:
+                    log.critical(
+                        "Max retries exceeded for %s. Stopping.",
+                        getattr(runner, "__name__", "stream"),
+                    )
+                    if publish_status:
+                        self._connection_status = "DISCONNECTED"
+                        event_bus.publish(ConnectionStatusEvent(
+                            status="DISCONNECTED",
+                            message="Máximo de reintentos alcanzado."
+                        ))
                     break
                 await asyncio.sleep(delay)
 
@@ -283,6 +335,106 @@ class BinanceService:
             raise
         finally:
             await self._close_client()
+
+    # ------------------------------------------------------------------
+    # User data stream — fills de órdenes LIMIT en LIVE (Q3a)
+    # ------------------------------------------------------------------
+
+    async def _run_user_stream(self) -> None:
+        """User data stream (executionReport) → OrderFillEvent.
+
+        Event-driven: la librería gestiona listenKey/keepalive internamente
+        (python-binance, sin timers ni polls nuestros — CERO POLLING).
+        Cliente propio y local: no comparte self._client con el ticker.
+        """
+        from binance import BinanceSocketManager  # type: ignore
+        from services.binance_client import create_client
+
+        client = await create_client()
+        try:
+            bm = BinanceSocketManager(client)
+
+            # OCP: un solo punto de ramificación por mercado
+            if settings.TRADING_TYPE == "FUTURES":
+                stream_context = bm.futures_user_socket()
+            elif settings.TRADING_TYPE == "MARGIN":
+                stream_context = bm.margin_socket()
+            else:  # SPOT
+                stream_context = bm.user_socket()
+
+            async with stream_context as ts:
+                log.info(
+                    "User data stream connected (%s, %s)",
+                    settings.TRADING_TYPE, settings.TRADING_SYMBOL,
+                )
+                while self._running:
+                    try:
+                        msg = await asyncio.wait_for(ts.recv(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        continue  # keepalive interno de la librería
+
+                    if msg.get("e") == "error":
+                        raise Exception(f"User WS error: {msg}")
+
+                    if "data" in msg:
+                        msg = msg["data"]
+
+                    fill = self._parse_execution_report(msg)
+                    if fill is not None:
+                        event_bus.publish(fill)
+                        log.info(
+                            "User stream: %s %s @ %.4f",
+                            fill.status, fill.order_id, fill.price,
+                        )
+        finally:
+            try:
+                await client.close_connection()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _parse_execution_report(msg: dict) -> OrderFillEvent | None:
+        """Parsea un executionReport a OrderFillEvent (función pura — testeable).
+
+        Campos Binance: e=evento, c=clientOrderId, X=status, ap=avgPrice
+        (futures), L=last fill price, z=cumulative qty, Z=cumulative quote.
+        Solo interesan FILLED/CANCELED: NEW/PARTIALLY_FILLED se ignoran
+        (un fill parcial no abre posición completa).
+        """
+        if msg.get("e") != "executionReport":
+            return None
+
+        client_order_id = str(msg.get("c") or "")
+        if not client_order_id:
+            return None
+
+        status_raw = str(msg.get("X") or "")
+        if status_raw == "FILLED":
+            status = "FILLED"
+        elif status_raw in ("CANCELED", "EXPIRED", "REJECTED"):
+            status = "CANCELED"
+        else:
+            return None  # NEW / PARTIALLY_FILLED
+
+        avg = float(msg.get("ap", 0) or 0)
+        if avg <= 0:
+            executed = float(msg.get("z", 0) or 0)
+            cumulative = float(msg.get("Z", 0) or 0)
+            if executed > 0 and cumulative > 0:
+                avg = cumulative / executed
+        if avg <= 0:
+            avg = float(msg.get("L", 0) or 0)
+
+        quantity = float(msg.get("z", 0) or 0) or float(msg.get("q", 0) or 0)
+
+        return OrderFillEvent(
+            order_id=client_order_id,
+            status=status,
+            price=avg,
+            quantity=quantity,
+            mode="LIVE",
+            source="USER_STREAM",
+        )
 
     @staticmethod
     def _normalize_price(ticker: dict, trading_type: str) -> str:

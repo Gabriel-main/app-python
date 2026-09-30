@@ -57,12 +57,14 @@ class Order(SQLModel, table=True):
     symbol: str = Field(index=True)
     side: str                          # "BUY" | "SELL"
     quantity: float
-    price: float
+    price: float                       # precio de la orden (fill o límite si PENDING)
     mode: str                          # "PAPER" | "LIVE"
     trading_type: str = "SPOT"         # "SPOT" | "FUTURES" | "MARGIN"
     leverage: int = 1                  # 1x-150x según límite de Binance por símbolo (solo Futures/Margin)
     order_type: str = "MARKET"         # "MARKET" | "LIMIT"
     status: str = Field(default="FILLED")   # "FILLED" | "PENDING" | "CANCELLED"
+    limit_price: float = 0.0           # precio límite original (se conserva tras el fill)
+    entry_price: float = 0.0           # Pe teórica de la operación asociada
     pnl: Optional[float] = None        # Profit & Loss calculado al cerrar
     timestamp: float = Field(default_factory=time.time)
 

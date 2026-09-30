@@ -232,3 +232,53 @@ def test_type_section_restore():
     assert section.get_leverage() == 10
     assert section.get_order_type() == "LIMIT"
     assert section.get_limit_price() == 65000.0
+
+
+# ---------------------------------------------------------------------------
+# Validación de precio límite (LIMIT exige > 0)
+# ---------------------------------------------------------------------------
+def test_get_limit_price_invalid_text_returns_zero():
+    """Texto no numérico no lanza ValueError → 0.0 (inválido, bloquea guardado)."""
+    section = TradingTypeSection()
+    section._limit_price_field.value = "abc"
+    assert section.get_limit_price() == 0.0
+
+
+def test_get_limit_price_empty_returns_zero():
+    section = TradingTypeSection()
+    section._limit_price_field.value = ""
+    assert section.get_limit_price() == 0.0
+
+
+def test_get_limit_price_valid_text():
+    section = TradingTypeSection()
+    section._limit_price_field.value = "65000.5"
+    assert section.get_limit_price() == 65000.5
+
+
+def test_confirm_dialog_shows_limit_price_on_switch():
+    """MARKET → LIMIT con precio: el resumen debe mostrar el precio límite
+    (bugfix: la condición usa form.order_type, no el valor viejo)."""
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.TRADING_SYMBOL = "BTCUSDT"
+        mock_settings.TRADING_MODE = "PAPER"
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        mock_settings.ORDER_TYPE = "MARKET"
+        mock_settings.LIMIT_PRICE = 0.0
+        mock_settings.TRADE_AMOUNT = 10.0
+        mock_settings.TRADE_CURRENCY = "USDT"
+        mock_settings.STOP_LOSS = 1.01
+        mock_settings.STOP_LOSS_TYPE = "PERCENT"
+        mock_settings.TIMEFRAME = 1
+        mock_settings.TIMEFRAME_UNIT = "MINUTES"
+
+        form = SettingsFormData(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65000.0,
+            amount=10.0, currency="USDT",
+            sl=1.01, sl_type="PERCENT", timeframe=1, tf_unit="MINUTES",
+        )
+        changes = ConfirmDialogHelper.build_changes_summary(form)
+        assert any("Precio Límite" in c for c in changes)
+        assert any("Orden" in c for c in changes)

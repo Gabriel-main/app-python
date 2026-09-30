@@ -55,6 +55,14 @@ class SettingsView(ft.Column):
         # --- Indicador de validación ---
         self._validation_indicator = SymbolValidationIndicator()
 
+        # --- Error de precio límite (ORDER_TYPE == LIMIT exige > 0) ---
+        self._limit_price_error = ft.Text(
+            "El precio límite debe ser mayor a 0.",
+            size=11,
+            color=ft.Colors.RED_400,
+            visible=False,
+        )
+
         # --- Botón guardar ---
         self._save_btn = ft.FilledButton(
             content="Guardar y Reconectar",
@@ -103,6 +111,11 @@ class SettingsView(ft.Column):
                 width=380,
                 padding=ft.Padding.only(left=4, bottom=4),
             ),
+            ft.Container(
+                content=self._limit_price_error,
+                width=380,
+                padding=ft.Padding.only(left=4, bottom=4),
+            ),
             ft.Row(controls=[self._save_btn], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row(controls=[self._feedback_text], alignment=ft.MainAxisAlignment.CENTER),
         ]
@@ -146,7 +159,9 @@ class SettingsView(ft.Column):
         self._mode_section.set_disabled(disabled)
         self._type_section.set_disabled(disabled)
         self._params_section.set_disabled(disabled)
-        self._save_btn.disabled = disabled or not self._has_changes()
+        self._save_btn.disabled = (
+            disabled or not self._has_changes() or not self._is_limit_price_valid()
+        )
         update_batcher.mark_dirty(self._save_btn)
 
     # ------------------------------------------------------------------
@@ -173,8 +188,17 @@ class SettingsView(ft.Column):
         symbol_valid = not self._validation_indicator.visible or (
             self._validation_indicator._icon.color == ft.Colors.GREEN_400
         )
-        self._save_btn.disabled = not has_changes or not symbol_valid
+        limit_valid = self._is_limit_price_valid()
+        self._limit_price_error.visible = not limit_valid
+        self._save_btn.disabled = not has_changes or not symbol_valid or not limit_valid
         update_batcher.mark_dirty(self._save_btn)
+        update_batcher.mark_dirty(self._limit_price_error)
+
+    def _is_limit_price_valid(self) -> bool:
+        """ORDER_TYPE == LIMIT exige LIMIT_PRICE > 0 (y parseable)."""
+        if self._type_section.get_order_type() != "LIMIT":
+            return True
+        return self._type_section.get_limit_price() > 0
 
     # ------------------------------------------------------------------
     # Validación de símbolo
@@ -277,6 +301,10 @@ class SettingsView(ft.Column):
     def _on_save(self, e: ft.ControlEvent) -> None:
         if self._bot_active:
             self._show_bot_active_warning()
+            return
+        if not self._is_limit_price_valid():
+            self._limit_price_error.visible = True
+            update_batcher.mark_dirty(self._limit_price_error)
             return
         form = self._build_form_data()
         changes = ConfirmDialogHelper.build_changes_summary(form)

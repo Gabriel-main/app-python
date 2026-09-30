@@ -36,6 +36,19 @@ def _operation_card(op: OperationState) -> ft.Container:
         op.state, (ft.Colors.WHITE, ft.Colors.GREY_800, op.state)
     )
 
+    badges = [
+        Badge(label=side_label, fg_color=side_fg, bg_color=side_bg),
+        Badge(label=st_label, fg_color=st_fg, bg_color=st_bg, border_radius=4),
+    ]
+    if not op.entry_filled:
+        # Orden LIMIT working: la entrada aún no llenó (sin posición real)
+        badges.append(Badge(
+            label="ENTRADA PENDIENTE",
+            fg_color=ft.Colors.AMBER_400,
+            bg_color=ft.Colors.AMBER_900,
+            border_radius=4,
+        ))
+
     card = ft.Container(
         bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
         border_radius=10,
@@ -43,11 +56,10 @@ def _operation_card(op: OperationState) -> ft.Container:
         border=ft.Border.all(1, ft.Colors.with_opacity(0.1, ft.Colors.WHITE)),
         content=ft.Column(
             controls=[
-                # Fila superior: lado + estado
+                # Fila superior: lado + estado (+ fill pendiente si LIMIT)
                 ft.Row(
                     controls=[
-                        Badge(label=side_label, fg_color=side_fg, bg_color=side_bg),
-                        Badge(label=st_label, fg_color=st_fg, bg_color=st_bg, border_radius=4),
+                        *badges,
                         ft.Container(expand=True),
                         ft.Text(op.order_id, size=9, color=ft.Colors.BLUE_GREY_500),
                     ],
@@ -86,8 +98,10 @@ def _operation_card(op: OperationState) -> ft.Container:
             spacing=0,
         ),
     )
-    # Tag para identificar la tarjeta en el diff
+    # Tags para identificar la tarjeta en el diff
     card._op_order_id = op.order_id
+    card._op_state = op.state
+    card._op_entry_filled = op.entry_filled
     return card
 
 
@@ -175,13 +189,23 @@ class OperationsPanel(ft.Container):
         else:
             self._empty_text.visible = False
 
-            # Diff incremental: solo recrear si cambiaron los order_ids
-            new_ids = {op.order_id for op in self._operations}
-            existing_ids = {
-                getattr(c, '_op_order_id', None) for c in self._operations_column.controls
+            # Diff incremental: recrear si cambiaron los order_ids, el state
+            # o el fill de entrada (sino el badge "ENTRADA PENDIENTE" no se
+            # redibujaría: un cambio in-place con el mismo order_id)
+            new_keys = {
+                (op.order_id, op.state, op.entry_filled)
+                for op in self._operations
+            }
+            existing_keys = {
+                (
+                    getattr(c, '_op_order_id', None),
+                    getattr(c, '_op_state', None),
+                    getattr(c, '_op_entry_filled', None),
+                )
+                for c in self._operations_column.controls
             }
 
-            if new_ids != existing_ids:
+            if new_keys != existing_keys:
                 # Reconstruir solo si hay diff real
                 self._operations_column.controls.clear()
                 for op in self._operations:

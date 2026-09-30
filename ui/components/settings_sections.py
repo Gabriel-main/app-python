@@ -479,7 +479,11 @@ class TradingTypeSection(ft.Container):
         return self._order_type_dropdown.value or "MARKET"
 
     def get_limit_price(self) -> float:
-        return float(self._limit_price_field.value or "0")
+        """Precio límite parseado de forma segura (texto vacío/inválido → 0.0)."""
+        try:
+            return float(self._limit_price_field.value or "0")
+        except (TypeError, ValueError):
+            return 0.0
 
     def restore(self, form_snapshot: dict) -> None:
         self._trading_type_dropdown.value = form_snapshot["trading_type"]
@@ -707,7 +711,7 @@ class ConfirmDialogHelper:
             changes.append(f"Leverage: {settings.LEVERAGE}x → {form.leverage}x")
         if form.order_type != settings.ORDER_TYPE:
             changes.append(f"Orden: {settings.ORDER_TYPE} → {form.order_type}")
-        if form.limit_price != settings.LIMIT_PRICE and settings.ORDER_TYPE == "LIMIT":
+        if form.limit_price != settings.LIMIT_PRICE and form.order_type == "LIMIT":
             changes.append(f"Precio Límite: ${settings.LIMIT_PRICE} → ${form.limit_price}")
         if form.amount != settings.TRADE_AMOUNT:
             changes.append(f"Monto: ${settings.TRADE_AMOUNT} → ${form.amount}")

@@ -13,7 +13,7 @@ from typing import Protocol
 import flet as ft
 
 from core.event_bus import event_bus
-from core.events import OrderExecutedEvent
+from core.events import OrderCanceledEvent, OrderExecutedEvent, OrderPlacedEvent
 from core.update_batcher import update_batcher
 from ui.components.order_card import OrderCard
 
@@ -72,10 +72,14 @@ class OrdersView(ft.Column):
     # ------------------------------------------------------------------
     def did_mount(self) -> None:
         event_bus.subscribe(OrderExecutedEvent, self._on_order_executed)
+        event_bus.subscribe(OrderPlacedEvent, self._on_order_placed)
+        event_bus.subscribe(OrderCanceledEvent, self._on_order_canceled)
         self._load_task = asyncio.create_task(self._load_orders(), name="load_orders_view")
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(OrderExecutedEvent, self._on_order_executed)
+        event_bus.unsubscribe(OrderPlacedEvent, self._on_order_placed)
+        event_bus.unsubscribe(OrderCanceledEvent, self._on_order_canceled)
         if self._load_task and not self._load_task.done():
             self._load_task.cancel()
 
@@ -100,10 +104,11 @@ class OrdersView(ft.Column):
                 )
             else:
                 for order in orders:
-                    self._list_column.controls.append(OrderCard(order))
+                    card = OrderCard(order)
+                    card._order_id = order.get("order_id")
+                    self._list_column.controls.append(card)
 
-            count = len(orders) if orders else 0
-            self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
+            self._recount_orders()
 
         except asyncio.CancelledError:
             return
@@ -119,10 +124,38 @@ class OrdersView(ft.Column):
         update_batcher.mark_dirty(self._order_count_text)
 
     # ------------------------------------------------------------------
-    # Actualización reactiva
+    # Actualización reactiva (placed → filled → canceled)
     # ------------------------------------------------------------------
+    def _recount_orders(self) -> None:
+        count = sum(1 for c in self._list_column.controls if hasattr(c, "_order_id"))
+        self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
+
+    def _clear_empty_message(self) -> None:
+        self._list_column.controls = [
+            c for c in self._list_column.controls
+            if not (isinstance(c, ft.Row) and any(
+                isinstance(x, ft.Text) and "Sin órdenes" in (x.value or "")
+                for x in c.controls
+            ))
+        ]
+
+    def _insert_order(self, order_dict: dict) -> None:
+        """Inserta/actualiza la tarjeta de una orden (dedupe por order_id)."""
+        order_id = order_dict["order_id"]
+        self._clear_empty_message()
+        self._list_column.controls = [
+            c for c in self._list_column.controls
+            if getattr(c, "_order_id", None) != order_id
+        ]
+        card = OrderCard(order_dict)
+        card._order_id = order_id
+        self._list_column.controls.insert(0, card)
+        self._recount_orders()
+        update_batcher.mark_dirty(self._list_column)
+        update_batcher.mark_dirty(self._order_count_text)
+
     async def _on_order_executed(self, event: OrderExecutedEvent) -> None:
-        order_dict = {
+        self._insert_order({
             "order_id": event.order_id,
             "symbol": event.symbol,
             "side": event.side,
@@ -132,18 +165,30 @@ class OrdersView(ft.Column):
             "status": "FILLED",
             "pnl": None,
             "timestamp": event.timestamp,
-        }
+        })
 
-        # Quitar el mensaje de "sin órdenes" si existía
-        self._list_column.controls = [
-            c for c in self._list_column.controls
-            if not (isinstance(c, ft.Row) and any(isinstance(x, ft.Text) and "Sin órdenes" in (x.value or "") for x in c.controls))
-        ]
+    async def _on_order_placed(self, event: OrderPlacedEvent) -> None:
+        """Orden LIMIT working: tarjeta con status PENDING (precio = límite)."""
+        self._insert_order({
+            "order_id": event.order_id,
+            "symbol": event.symbol,
+            "side": event.side,
+            "quantity": event.quantity,
+            "price": event.price,
+            "mode": event.mode,
+            "status": "PENDING",
+            "pnl": None,
+            "timestamp": event.timestamp,
+        })
 
-        self._list_column.controls.insert(0, OrderCard(order_dict))
-
-        count = len(self._list_column.controls)
-        self._order_count_text.value = f"{count} orden{'es' if count != 1 else ''}"
-
-        update_batcher.mark_dirty(self._list_column)
-        update_batcher.mark_dirty(self._order_count_text)
+    async def _on_order_canceled(self, event: OrderCanceledEvent) -> None:
+        """Quita la tarjeta PENDING de una orden cancelada."""
+        removed = False
+        for c in list(self._list_column.controls):
+            if getattr(c, "_order_id", None) == event.order_id:
+                self._list_column.controls.remove(c)
+                removed = True
+        if removed:
+            self._recount_orders()
+            update_batcher.mark_dirty(self._list_column)
+            update_batcher.mark_dirty(self._order_count_text)

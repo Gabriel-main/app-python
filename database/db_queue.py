@@ -25,7 +25,9 @@ from database.models import Operation, Order, Position, PriceTick
 from core.event_bus import event_bus
 from core.events import (
     OperationUpdateEvent,
+    OrderCanceledEvent,
     OrderExecutedEvent,
+    OrderPlacedEvent,
     PositionUpdateEvent,
     PriceTickEvent,
 )
@@ -48,6 +50,16 @@ class _OrderWriteItem:
 
 
 @dataclass
+class _OrderPlacedItem:
+    event: OrderPlacedEvent
+
+
+@dataclass
+class _OrderCanceledItem:
+    event: OrderCanceledEvent
+
+
+@dataclass
 class _OperationUpdateItem:
     event: OperationUpdateEvent
 
@@ -57,7 +69,14 @@ class _PositionUpdateItem:
     event: PositionUpdateEvent
 
 
-_QueueItem = Union[_TickWriteItem, _OrderWriteItem, _OperationUpdateItem, _PositionUpdateItem]
+_QueueItem = Union[
+    _TickWriteItem,
+    _OrderWriteItem,
+    _OrderPlacedItem,
+    _OrderCanceledItem,
+    _OperationUpdateItem,
+    _PositionUpdateItem,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -84,11 +103,25 @@ class DBQueueWorker:
             log.warning("DB queue full, dropping tick for %s", event.symbol)
 
     def enqueue_order(self, event: OrderExecutedEvent) -> None:
-        """Encola una orden ejecutada para guardar en DB. No bloqueante."""
+        """Encola una orden ejecutada (FILLED) para guardar en DB. No bloqueante."""
         try:
             self._queue.put_nowait(_OrderWriteItem(event))
         except asyncio.QueueFull:
             log.warning("DB queue full, dropping order %s", event.order_id)
+
+    def enqueue_order_placed(self, event: OrderPlacedEvent) -> None:
+        """Encola una orden LIMIT placed (status PENDING). No bloqueante."""
+        try:
+            self._queue.put_nowait(_OrderPlacedItem(event))
+        except asyncio.QueueFull:
+            log.warning("DB queue full, dropping placed order %s", event.order_id)
+
+    def enqueue_order_canceled(self, event: OrderCanceledEvent) -> None:
+        """Encola la cancelación de una orden LIMIT (status CANCELLED). No bloqueante."""
+        try:
+            self._queue.put_nowait(_OrderCanceledItem(event))
+        except asyncio.QueueFull:
+            log.warning("DB queue full, dropping canceled order %s", event.order_id)
 
     def enqueue_operation_update(self, event: OperationUpdateEvent) -> None:
         """Encola una actualización de operación para guardar en DB. No bloqueante."""
@@ -164,6 +197,10 @@ class DBQueueWorker:
             await self._save_tick(item.event)
         elif isinstance(item, _OrderWriteItem):
             await self._save_order(item.event)
+        elif isinstance(item, _OrderPlacedItem):
+            await self._save_order_placed(item.event)
+        elif isinstance(item, _OrderCanceledItem):
+            await self._save_order_canceled(item.event)
         elif isinstance(item, _OperationUpdateItem):
             await self._save_operation_update(item.event)
         elif isinstance(item, _PositionUpdateItem):
@@ -186,35 +223,89 @@ class DBQueueWorker:
         except Exception as exc:
             log.error("Failed to save tick: %s", exc)
 
+    async def _upsert_order_row(self, order_id: str, data: dict, updates: dict) -> None:
+        """Inserta o actualiza una fila de orders por order_id (DRY).
+
+        Permite la transición PENDING → FILLED/CANCELLED de las órdenes
+        LIMIT (el insert-only anterior la hacía imposible).
+        Si `data` está vacío y la fila no existe, no inserta nada.
+        """
+        from sqlmodel import select
+        async with get_session() as session:
+            stmt = select(Order).where(Order.order_id == order_id)
+            result = await session.exec(stmt)
+            existing = result.first()
+            if existing:
+                for key, value in updates.items():
+                    setattr(existing, key, value)
+            elif data:
+                session.add(Order(**data))
+            else:
+                log.warning("Order %s not found for update, skipping", order_id)
+                return
+            await session.commit()
+
     async def _save_order(self, event: OrderExecutedEvent) -> None:
         try:
-            async with get_session() as session:
-                # Verificar si ya existe (defensa en profundidad)
-                from sqlmodel import select
-                stmt = select(Order).where(Order.order_id == event.order_id)
-                result = await session.exec(stmt)
-                if result.first():
-                    log.warning("Order %s already exists, skipping", event.order_id)
-                    return
-
-                order = Order(
-                    order_id=event.order_id,
-                    symbol=event.symbol,
-                    side=event.side,
-                    quantity=event.quantity,
-                    price=event.price,
-                    mode=event.mode,
-                    entry_price=event.entry_price,
-                    trading_type=event.trading_type,
-                    leverage=event.leverage,
-                    order_type=event.order_type,
-                    status="FILLED",
-                    timestamp=event.timestamp,
-                )
-                session.add(order)
-                await session.commit()
+            await self._upsert_order_row(
+                event.order_id,
+                data={
+                    "order_id": event.order_id,
+                    "symbol": event.symbol,
+                    "side": event.side,
+                    "quantity": event.quantity,
+                    "price": event.price,
+                    "mode": event.mode,
+                    "trading_type": event.trading_type,
+                    "leverage": event.leverage,
+                    "order_type": event.order_type,
+                    "status": "FILLED",
+                    "limit_price": event.limit_price,
+                    "entry_price": event.entry_price,
+                    "timestamp": event.timestamp,
+                },
+                updates={
+                    "price": event.price,
+                    "status": "FILLED",
+                    "quantity": event.quantity,
+                },
+            )
         except Exception as exc:
             log.error("Failed to save order: %s", exc)
+
+    async def _save_order_placed(self, event: OrderPlacedEvent) -> None:
+        try:
+            await self._upsert_order_row(
+                event.order_id,
+                data={
+                    "order_id": event.order_id,
+                    "symbol": event.symbol,
+                    "side": event.side,
+                    "quantity": event.quantity,
+                    "price": event.price,
+                    "mode": event.mode,
+                    "trading_type": settings.TRADING_TYPE,
+                    "leverage": settings.LEVERAGE,
+                    "order_type": "LIMIT",
+                    "status": "PENDING",
+                    "limit_price": event.price,
+                    "entry_price": 0.0,
+                    "timestamp": event.timestamp,
+                },
+                updates={},
+            )
+        except Exception as exc:
+            log.error("Failed to save placed order: %s", exc)
+
+    async def _save_order_canceled(self, event: OrderCanceledEvent) -> None:
+        try:
+            await self._upsert_order_row(
+                event.order_id,
+                data={},  # fila inexistente → no insertar (faltan campos base)
+                updates={"status": "CANCELLED"},
+            )
+        except Exception as exc:
+            log.error("Failed to save canceled order: %s", exc)
 
     async def _save_operation_update(self, event: OperationUpdateEvent) -> None:
         """Persiste el estado de las operaciones en la tabla operations."""

@@ -71,9 +71,18 @@ valida separación de capas y aplica reglas de reactividad.
 | `PriceTickEvent` | `BinanceService` | `BotEngine`, `PriceTicker`, `MiniChart`, `DashboardView` |
 | `BotSignalEvent` | `BotEngine` | `BotStatusBar` |
 | `OrderExecutedEvent` | `BotEngine` | `OrdersView` |
+| `OrderPlacedEvent` | `BotEngine` (LIMIT NEW) | `OrdersView`, `db_queue` |
+| `OrderFillEvent` | `BinanceService` (LIVE user stream), `BotEngine` (PAPER ticks) | `BotEngine` |
+| `OrderCanceledEvent` | `BotEngine` | `OrdersView`, `db_queue` |
 | `ConnectionStatusEvent` | `BinanceService` | `ConnectionIndicator` |
 | `BotStateChangedEvent` | `DashboardView` (botón) | `BotEngine` |
 | `SettingsUpdatedEvent` | `SettingsView` | `BinanceService`, `BotEngine`, `DashboardView` |
+
+> **Regla de fills LIMIT**: `OrderExecutedEvent` SIEMPRE significa "fill confirmado"
+> (único camino: `_complete_limit_fill` en `BotEngine`). Las órdenes LIMIT working
+> emiten `OrderPlacedEvent` al colocarse y `OrderCanceledEvent` al cancelarse.
+> UI jamás invoca SDKs de Binance; `OrderFillEvent` es el único puente crudo
+> user-stream → motor.
 
 ---
 

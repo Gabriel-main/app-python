@@ -11,6 +11,18 @@ from datetime import datetime
 
 from ui.components.colors import SIDE_COLORS, SIDE_LABELS, MODE_COLORS
 
+# Status de la orden en exchange/DB (limit orders pueden estar PENDING)
+_STATUS_COLORS = {
+    "FILLED": ft.Colors.GREEN_400,
+    "PENDING": ft.Colors.AMBER_400,
+    "CANCELLED": ft.Colors.RED_400,
+}
+_STATUS_LABELS = {
+    "FILLED": "FILLED",
+    "PENDING": "PENDIENTE",
+    "CANCELLED": "CANCELADA",
+}
+
 
 def OrderCard(order: dict) -> ft.Card:
     """Construye una tarjeta de orden. `order` es un dict con campos de Order."""
@@ -19,10 +31,13 @@ def OrderCard(order: dict) -> ft.Card:
     mode = order.get("mode", "PAPER")
     pnl = order.get("pnl")
     ts = order.get("timestamp", 0)
+    status = str(order.get("status") or "FILLED")
 
     side_fg, side_bg = SIDE_COLORS.get(side, (ft.Colors.WHITE, ft.Colors.GREY_800))
     side_label = SIDE_LABELS.get(side, side)
     mode_color = MODE_COLORS.get(mode, ft.Colors.BLUE_GREY_400)
+    status_color = _STATUS_COLORS.get(status, ft.Colors.BLUE_GREY_400)
+    status_label = _STATUS_LABELS.get(status, status)
 
     pnl_text = ""
     pnl_color = ft.Colors.BLUE_GREY_400
@@ -81,6 +96,12 @@ def OrderCard(order: dict) -> ft.Card:
                             ),
                             ft.Row(
                                 controls=[
+                                    ft.Container(
+                                        content=ft.Text(status_label, size=9, color=status_color),
+                                        border=ft.Border.all(1, status_color),
+                                        border_radius=4,
+                                        padding=ft.Padding(left=4, right=4, top=2, bottom=2),
+                                    ),
                                     ft.Container(
                                         content=ft.Text(mode, size=9, color=mode_color),
                                         border=ft.Border.all(1, mode_color),

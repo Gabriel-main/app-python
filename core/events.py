@@ -67,6 +67,7 @@ class OrderExecutedEvent:
     trading_type: Literal["SPOT", "FUTURES", "MARGIN"] = "SPOT"
     leverage: int = 1
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    limit_price: float = 0.0           # precio límite original (0 si MARKET)
     operation_id: str = ""          # OC-xxx / OV-xxx (id de la operación, no del executor)
     timestamp: float = field(default_factory=time.time)
 
@@ -81,19 +82,70 @@ class OrderFailedEvent:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass
+class OrderPlacedEvent:
+    """Orden LIMIT aceptada por el exchange/simulador — aún sin llenar.
+
+    Solo se emite para órdenes LIMIT con status NEW. Nunca para MARKET
+    (una MARKET siempre produce OrderExecutedEvent directamente).
+    """
+    order_id: str                    # clientOrderId generado por el bot
+    operation_id: str                # OC-xxx / OV-xxx
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    quantity: float
+    price: float                     # precio límite de la orden
+    order_type: Literal["LIMIT"] = "LIMIT"
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class OrderFillEvent:
+    """Notificación cruda de fill/cancelación de una orden.
+
+    Productores: BinanceService (LIVE, user data stream executionReport)
+    y BotEngine (PAPER, cruce de PriceTickEvent).
+    Único consumidor: BotEngine (la convierte en OrderExecutedEvent /
+    OrderCanceledEvent, que sí conocen entry_price/stop_loss de la operación).
+    """
+    order_id: str                    # clientOrderId que generó el bot
+    status: Literal["FILLED", "CANCELED"]
+    price: float = 0.0               # precio promedio del fill
+    quantity: float = 0.0
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
+    source: Literal["USER_STREAM", "PAPER_TICK"] = "USER_STREAM"
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class OrderCanceledEvent:
+    """Orden LIMIT cancelada (bot stop, settings, timeframe o exchange)."""
+    order_id: str
+    operation_id: str
+    reason: str = ""
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
+    timestamp: float = field(default_factory=time.time)
+
+
 # ---------------------------------------------------------------------------
 # Eventos de Operaciones Dual (OC/OV)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class OperationState:
-    """Estado de una operación individual (COMPRA o VENTA)."""
+    """Estado de una operación individual (COMPRA o VENTA).
+
+    entry_filled: False mientras la orden de entrada LIMIT siga working
+    (la operación aún no tiene posición; SL/PnL no aplican).
+    """
     side: Literal["BUY", "SELL"]
     state: Literal["ACTIVE", "PENDING", "PAST"]
     entry_price: float       # Pe
     stop_loss: float         # PSL
     quantity: float
     order_id: str
+    entry_filled: bool = True
     timestamp: float = field(default_factory=time.time)
 
 
