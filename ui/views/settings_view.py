@@ -26,6 +26,9 @@ from ui.components.settings_sections import (
     SymbolValidationIndicator,
     TradingModeSection,
     TradingTypeSection,
+    validate_amount,
+    validate_stop_loss,
+    validate_timeframe,
 )
 
 
@@ -141,6 +144,8 @@ class SettingsView(ft.Column):
         from services.bot_engine import bot_engine
         self._bot_active = bot_engine.is_active
         self._update_form_lock()
+        # Validación proactiva al abrir (ej: FUTURES con monto < 50)
+        self._update_save_button_state()
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
         # Consultar leverage máximo de Binance para el símbolo actual
         asyncio.create_task(self._refresh_max_leverage())
@@ -160,7 +165,10 @@ class SettingsView(ft.Column):
         self._type_section.set_disabled(disabled)
         self._params_section.set_disabled(disabled)
         self._save_btn.disabled = (
-            disabled or not self._has_changes() or not self._is_limit_price_valid()
+            disabled
+            or not self._has_changes()
+            or not self._is_limit_price_valid()
+            or any(self._form_errors())
         )
         update_batcher.mark_dirty(self._save_btn)
 
@@ -190,7 +198,11 @@ class SettingsView(ft.Column):
         )
         limit_valid = self._is_limit_price_valid()
         self._limit_price_error.visible = not limit_valid
-        self._save_btn.disabled = not has_changes or not symbol_valid or not limit_valid
+        errors = self._form_errors()
+        self._params_section.set_validation_errors(*errors)
+        self._save_btn.disabled = (
+            not has_changes or not symbol_valid or not limit_valid or any(errors)
+        )
         update_batcher.mark_dirty(self._save_btn)
         update_batcher.mark_dirty(self._limit_price_error)
 
@@ -199,6 +211,20 @@ class SettingsView(ft.Column):
         if self._type_section.get_order_type() != "LIMIT":
             return True
         return self._type_section.get_limit_price() > 0
+
+    def _form_errors(self) -> tuple[str | None, str | None, str | None]:
+        """Errores de validación: (monto, stop loss, temporalidad)."""
+        return (
+            validate_amount(
+                self._params_section.get_amount(),
+                self._type_section.get_trading_type(),
+            ),
+            validate_stop_loss(
+                self._params_section.get_sl(),
+                self._params_section.get_sl_type(),
+            ),
+            validate_timeframe(self._params_section.get_timeframe()),
+        )
 
     # ------------------------------------------------------------------
     # Validación de símbolo
@@ -306,6 +332,10 @@ class SettingsView(ft.Column):
             self._limit_price_error.visible = True
             update_batcher.mark_dirty(self._limit_price_error)
             return
+        errors = self._form_errors()
+        if any(errors):
+            self._params_section.set_validation_errors(*errors)
+            return
         form = self._build_form_data()
         changes = ConfirmDialogHelper.build_changes_summary(form)
         self._confirm_dialog = ConfirmDialogHelper.show(
@@ -391,6 +421,7 @@ class SettingsView(ft.Column):
         self._mode_section.restore(form_snapshot)
         self._type_section.restore(form_snapshot)
         self._params_section.restore(form_snapshot)
+        self._update_save_button_state()
 
     def _show_bot_active_warning(self) -> None:
         """Muestra alerta de que el bot debe detenerse primero."""

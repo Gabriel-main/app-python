@@ -83,6 +83,12 @@ valida separación de capas y aplica reglas de reactividad.
 > emiten `OrderPlacedEvent` al colocarse y `OrderCanceledEvent` al cancelarse.
 > UI jamás invoca SDKs de Binance; `OrderFillEvent` es el único puente crudo
 > user-stream → motor.
+>
+> **Regla `purpose` en `OrderExecutedEvent`**: `ENTRY` = abre posición
+> (paper_balance debita/bloquea `TRADE_AMOUNT`); `EXIT` = cierra posición
+> (libera capital + PnL). El lado de la orden en `EXIT` es el OPUESTO al de la
+> operación (`_build_order_request` lo invierte). `paper_balance` jamás acredita
+> un `EXIT` sin posición trackeada (evita inflar el wallet).
 
 ---
 

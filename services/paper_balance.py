@@ -90,10 +90,13 @@ class PaperBalanceService:
         if event.mode != "PAPER":
             return
 
-        if event.side == "BUY":
-            self._handle_buy(event)
-        elif event.side == "SELL":
-            self._handle_sell(event)
+        # purpose distingue apertura (debita/bloquea) de cierre (libera+PnL).
+        # Sin este campo, una entrada corta acredita la venta como proceeds
+        # e infla el wallet (bug del +monto).
+        if event.purpose == "EXIT":
+            self._handle_exit(event)
+        else:
+            self._handle_entry(event)
 
         self._publish_balance()
 
@@ -102,50 +105,56 @@ class PaperBalanceService:
         """Clave de posición: operation_id (OC-/OV-) con fallback a order_id."""
         return event.operation_id or event.order_id
 
-    def _handle_buy(self, event: OrderExecutedEvent) -> None:
-        """BUY: debitar costo de la posición y abrir tracking."""
+    def _handle_entry(self, event: OrderExecutedEvent) -> None:
+        """ENTRY (BUY o SELL): debitar capital, bloquearlo y trackear posición.
+
+        Simétrico para largo y corto: abrir posición siempre consume margen,
+        sin importar el lado.
+        """
         capital = settings.TRADE_AMOUNT  # Capital invertido
         self._free -= capital
         self._locked += capital
 
         self._positions[self._position_key(event)] = _OpenPosition(
-            side="BUY",
+            side=event.side,
             entry_price=event.entry_price,
             quantity=event.quantity,
             stop_loss=event.stop_loss,
             capital=capital,
         )
         log.debug(
-            "PAPER BUY: capital=%.4f, free=%.2f, locked=%.2f",
-            capital, self._free, self._locked,
+            "PAPER ENTRY %s: capital=%.4f, free=%.2f, locked=%.2f",
+            event.side, capital, self._free, self._locked,
         )
 
-    def _handle_sell(self, event: OrderExecutedEvent) -> None:
-        """SELL: cerrar posición, calcular PnL con fórmula unificada."""
+    def _handle_exit(self, event: OrderExecutedEvent) -> None:
+        """EXIT: cerrar posición, calcular PnL con fórmula unificada.
+
+        Si no hay posición trackeada (p.ej. tras reinicio) NO toca el saldo:
+        acreditar proceeds sin débito previo inflaría el wallet.
+        """
         position = self._positions.pop(self._position_key(event), None)
 
-        if position:
-            resultado, pnl = PnLCalculator.calc_closed_pnl(
-                capital=position.capital,
-                entry_price=position.entry_price,
-                stop_loss=position.stop_loss,
-                side=position.side,
+        if position is None:
+            log.warning(
+                "PAPER EXIT sin posición trackeada (%s) — saldo sin cambios",
+                self._position_key(event),
             )
+            return
 
-            self._locked -= position.capital
-            self._free += resultado
-            log.debug(
-                "PAPER SELL (closed): pnl=%.4f, free=%.2f",
-                pnl, self._free,
-            )
-        else:
-            # SELL sin posición abierta (PENDING ejecutada)
-            proceeds = event.quantity * event.price
-            self._free += proceeds
-            log.debug(
-                "PAPER SELL (new): proceeds=%.4f, free=%.2f",
-                proceeds, self._free,
-            )
+        resultado, pnl = PnLCalculator.calc_closed_pnl(
+            capital=position.capital,
+            entry_price=position.entry_price,
+            stop_loss=position.stop_loss,
+            side=position.side,
+        )
+
+        self._locked -= position.capital
+        self._free += resultado
+        log.debug(
+            "PAPER EXIT %s: pnl=%.4f, free=%.2f, locked=%.2f",
+            position.side, pnl, self._free, self._locked,
+        )
 
     # ------------------------------------------------------------------
     # Publicación

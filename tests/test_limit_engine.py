@@ -244,3 +244,72 @@ async def test_close_open_positions_skips_unfilled_entries():
 
         # Sin fill → no se envía orden de cierre (no hay posición)
         assert _published(bus, OrderExecutedEvent) == []
+
+
+# ---------------------------------------------------------------------------
+# Cierre de posiciones: lado invertido + purpose + operation_id correcto
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_execute_stop_loss_inverts_side():
+    """Cerrar un BUY debe enviar SELL (no duplicar la posición)."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings(order_type="MARKET")), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        op = _make_op(side="BUY", entry_filled=True)
+        engine._operations = [op]
+        engine._current_price = 66000.0
+
+        await engine._execute_stop_loss(op, 64900.0)
+
+        executed = _published(bus, OrderExecutedEvent)
+        assert len(executed) == 1
+        assert executed[0].side == "SELL"          # lado invertido para cerrar
+        assert executed[0].purpose == "EXIT"
+        assert executed[0].operation_id == "OC-TEST01"
+        assert op.state == "PAST"
+
+
+@pytest.mark.asyncio
+async def test_close_open_positions_uses_original_operation_id():
+    """El cierre al detener el bot debe conservar OC-/OV- (sin prefijo CLOSE-)."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings(order_type="MARKET")), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        op = _make_op(side="BUY", entry_filled=True)
+        engine._operations = [op]
+        engine._current_price = 66000.0
+
+        await engine._close_open_positions()
+
+        executed = _published(bus, OrderExecutedEvent)
+        assert len(executed) == 1
+        assert executed[0].operation_id == "OC-TEST01"  # sin prefijo CLOSE-
+        assert executed[0].side == "SELL"
+        assert executed[0].purpose == "EXIT"
+
+
+@pytest.mark.asyncio
+async def test_complete_limit_fill_sets_purpose_entry():
+    """El fill de una working order LIMIT siempre es ENTRY (abre posición)."""
+    from core.events import OrderFillEvent
+
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        op = _make_op()
+        await engine._dispatch_order(op, purpose="ENTRY")
+        fill_oid = next(iter(engine._working_orders))
+
+        engine._complete_limit_fill(OrderFillEvent(
+            order_id=fill_oid, status="FILLED",
+            price=65000.0, mode="PAPER",
+        ))
+
+        executed = _published(bus, OrderExecutedEvent)
+        assert len(executed) == 1
+        assert executed[0].purpose == "ENTRY"
+        assert executed[0].side == "BUY"

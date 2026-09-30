@@ -837,10 +837,17 @@ class BotEngine:
             order_type = "LIMIT"
             limit_price = settings.LIMIT_PRICE
 
+        # 2a: la orden de cierre usa el lado OPUESTO al de la operación
+        # (cerrar un BUY = SELL; cerrar un SELL = BUY). Evita duplicar
+        # posición en vez de cerrarla.
+        side = op.side
+        if purpose == "EXIT":
+            side = "SELL" if op.side == "BUY" else "BUY"
+
         prefix = "PAPER" if settings.TRADING_MODE == "PAPER" else "LIVE"
         return OrderRequest(
             symbol=settings.TRADING_SYMBOL,
-            side=op.side,
+            side=side,
             quantity=op.quantity,
             order_type=order_type,
             price=limit_price,
@@ -851,13 +858,19 @@ class BotEngine:
         )
 
     def _build_order_event(
-        self, op: TradingOperation, placement: OrderPlacement, request: OrderRequest
+        self, op: TradingOperation, placement: OrderPlacement,
+        request: OrderRequest, purpose: str,
     ) -> OrderExecutedEvent:
-        """Factory method para OrderExecutedEvent (DRY)."""
+        """Factory method para OrderExecutedEvent (DRY).
+
+        `request.side` es el lado EFECTIVO de la orden (invertido en EXIT),
+        distinto de `op.side` (lado de la operación). `purpose` distingue
+        apertura/cierre para que paper_balance no acredite cierres como ventas.
+        """
         return OrderExecutedEvent(
             order_id=placement.order_id,
             symbol=request.symbol,
-            side=op.side,
+            side=request.side,
             quantity=op.quantity,
             price=placement.fill_price,
             mode=placement.mode,
@@ -868,6 +881,7 @@ class BotEngine:
             order_type=request.order_type,
             limit_price=request.price if request.order_type == "LIMIT" else 0.0,
             operation_id=op.order_id,  # OC-xxx / OV-xxx (Fase 4)
+            purpose=purpose,
             timestamp=time.time(),
         )
 
@@ -953,7 +967,7 @@ class BotEngine:
         if purpose == "ENTRY":
             op.entry_filled = True
 
-        order_event = self._build_order_event(op, placement, request)
+        order_event = self._build_order_event(op, placement, request, purpose)
         event_bus.publish(order_event)
         db_queue.enqueue_order(order_event)
 
@@ -993,6 +1007,8 @@ class BotEngine:
                 op.order_id,
             )
 
+        # 2d: las working orders solo son ENTRY por diseño (EXIT es siempre
+        # MARKET y nunca queda NEW), así que el fill siempre abre posición.
         order_event = OrderExecutedEvent(
             order_id=fill.order_id,
             symbol=working.symbol,
@@ -1007,6 +1023,7 @@ class BotEngine:
             order_type="LIMIT",
             limit_price=working.limit_price,
             operation_id=op.order_id,
+            purpose="ENTRY",
             timestamp=fill.timestamp,
         )
         event_bus.publish(order_event)
@@ -1131,18 +1148,11 @@ class BotEngine:
 
             log.info("Closing position: %s %s", op.side, op.order_id)
 
-            # Lado opuesto para cerrar
-            close_side = "SELL" if op.side == "BUY" else "BUY"
-            close_op = TradingOperation(
-                side=close_side,
-                state="ACTIVE",
-                entry_price=op.entry_price,
-                stop_loss=op.stop_loss,
-                quantity=op.quantity,
-                order_id=f"CLOSE-{op.order_id}",
-            )
-
-            await self._dispatch_order(close_op, self._current_price, purpose="EXIT")
+            # 2c: pasar el op ORIGINAL (no un close_op con prefijo CLOSE-).
+            # Así event.operation_id == op.order_id y paper_balance encuentra
+            # la posición por su clave (OC-/OV-). El lado lo invierte
+            # _build_order_request(vía purpose="EXIT").
+            await self._dispatch_order(op, self._current_price, purpose="EXIT")
 
     # ------------------------------------------------------------------
     # Helpers

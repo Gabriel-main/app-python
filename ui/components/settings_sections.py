@@ -405,6 +405,15 @@ class TradingTypeSection(ft.Container):
             on_change=self._notify_change,
         )
 
+        self._limit_price_hint = ft.Text(
+            "Entrada a precio fijo: solo se ejecuta si el mercado llega a este "
+            "precio; si no, queda pendiente hasta cancelar el bot o cambiar ajustes.",
+            size=11,
+            italic=True,
+            color=ft.Colors.BLUE_GREY_400,
+            visible=settings.ORDER_TYPE == "LIMIT",
+        )
+
         self.bgcolor = ft.Colors.BLUE_GREY_900
         self.border_radius = 14
         self.padding = ft.Padding.all(16)
@@ -417,6 +426,7 @@ class TradingTypeSection(ft.Container):
                 self._max_lev_label,
                 self._order_type_dropdown,
                 self._limit_price_field,
+                self._limit_price_hint,
                 ft.Text("Futures/Margin permiten leverage y posiciones long/short.", size=11, color=ft.Colors.BLUE_GREY_400),
             ],
             spacing=12,
@@ -433,7 +443,9 @@ class TradingTypeSection(ft.Container):
     def _on_order_type_changed(self, e: ft.ControlEvent) -> None:
         is_limit = e.control.value == "LIMIT"
         self._limit_price_field.visible = is_limit
+        self._limit_price_hint.visible = is_limit
         update_batcher.mark_dirty(self._limit_price_field)
+        update_batcher.mark_dirty(self._limit_price_hint)
         self._notify_change()
 
     def _notify_change(self, *args) -> None:
@@ -494,6 +506,7 @@ class TradingTypeSection(ft.Container):
         self._leverage_dropdown.visible = show_leverage
         is_limit = form_snapshot["order_type"] == "LIMIT"
         self._limit_price_field.visible = is_limit
+        self._limit_price_hint.visible = is_limit
 
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
@@ -603,6 +616,17 @@ class OperationParamsSection(ft.Container):
             on_select=self._notify_change,
         )
 
+        # --- Mensajes de error de validación (inline, bajo cada campo) ---
+        self._amount_error = ft.Text(
+            "", size=11, color=ft.Colors.RED_400, visible=False,
+        )
+        self._sl_error = ft.Text(
+            "", size=11, color=ft.Colors.RED_400, visible=False,
+        )
+        self._timeframe_error = ft.Text(
+            "", size=11, color=ft.Colors.RED_400, visible=False,
+        )
+
         self.bgcolor = ft.Colors.BLUE_GREY_900
         self.border_radius = 14
         self.padding = ft.Padding.all(16)
@@ -611,9 +635,12 @@ class OperationParamsSection(ft.Container):
             controls=[
                 ft.Text("📋 Parámetros", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                 ft.Row(controls=[self._amount_field, self._currency_dropdown], spacing=8),
+                self._amount_error,
                 self._symbol_picker,
                 ft.Row(controls=[self._sl_field, self._sl_type_dropdown], spacing=8),
+                self._sl_error,
                 ft.Row(controls=[self._timeframe_field, self._timeframe_unit_dropdown], spacing=8),
+                self._timeframe_error,
             ],
             spacing=12,
         )
@@ -636,19 +663,31 @@ class OperationParamsSection(ft.Container):
         return self._symbol_picker.get_selected_symbol()
 
     def get_amount(self) -> float:
-        return float(self._amount_field.value or "10.0")
+        """Monto parseado de forma segura (texto vacío/inválido → 0.0)."""
+        try:
+            return float(self._amount_field.value or "0")
+        except (TypeError, ValueError):
+            return 0.0
 
     def get_currency(self) -> str:
         return self._currency_dropdown.value or "USDT"
 
     def get_sl(self) -> float:
-        return float(self._sl_field.value or "1.01")
+        """Stop Loss parseado de forma segura (texto vacío/inválido → 0.0)."""
+        try:
+            return float(self._sl_field.value or "0")
+        except (TypeError, ValueError):
+            return 0.0
 
     def get_sl_type(self) -> str:
         return self._sl_type_dropdown.value or "PERCENT"
 
     def get_timeframe(self) -> int:
-        return int(self._timeframe_field.value or "1")
+        """Temporalidad parseada de forma segura (vacío/inválido → 0)."""
+        try:
+            return int(float(self._timeframe_field.value or "0"))
+        except (TypeError, ValueError):
+            return 0
 
     def get_tf_unit(self) -> str:
         return self._timeframe_unit_dropdown.value or "MINUTES"
@@ -677,6 +716,22 @@ class OperationParamsSection(ft.Container):
         _set_fields_disabled(self, disabled)
         update_batcher.mark_dirty(self)
 
+    def set_validation_errors(
+        self,
+        amount: str | None,
+        stop_loss: str | None,
+        timeframe: str | None,
+    ) -> None:
+        """Muestra/oculta los mensajes de error inline (None = oculto)."""
+        for control, message in (
+            (self._amount_error, amount),
+            (self._sl_error, stop_loss),
+            (self._timeframe_error, timeframe),
+        ):
+            control.value = message or ""
+            control.visible = message is not None
+            update_batcher.mark_dirty(control)
+
     def sync_from_settings(self) -> None:
         """Re-sincroniza widgets desde el settings singleton."""
         self.restore({
@@ -689,6 +744,40 @@ class OperationParamsSection(ft.Container):
         })
         self._symbol_picker.set_symbol(settings.TRADING_SYMBOL)
         update_batcher.mark_dirty(self)
+
+
+# ---------------------------------------------------------------------------
+# Helpers: Validaciones del formulario (puros y testeables)
+# ---------------------------------------------------------------------------
+MIN_FUTURES_NOTIONAL = 50.0  # Regla Binance USDⓈ-M (error -4164)
+
+
+def validate_amount(amount: float, trading_type: str) -> str | None:
+    """Valida el monto de operación. Retorna mensaje de error o None."""
+    if amount <= 0:
+        return "El monto debe ser mayor a 0."
+    if trading_type == "FUTURES" and amount < MIN_FUTURES_NOTIONAL:
+        return (
+            f"En Futures el monto mínimo es {MIN_FUTURES_NOTIONAL:g} USDT "
+            "(notional de Binance)."
+        )
+    return None
+
+
+def validate_stop_loss(sl: float, sl_type: str) -> str | None:
+    """Valida el stop loss. Retorna mensaje de error o None."""
+    if sl <= 0:
+        return "El Stop Loss debe ser mayor a 0."
+    if sl_type == "PERCENT" and sl > 100:
+        return "Con tipo %, el Stop Loss debe estar entre 0 y 100."
+    return None
+
+
+def validate_timeframe(tf: int) -> str | None:
+    """Valida la temporalidad. Retorna mensaje de error o None."""
+    if tf < 1:
+        return "La temporalidad debe ser al menos 1."
+    return None
 
 
 # ---------------------------------------------------------------------------

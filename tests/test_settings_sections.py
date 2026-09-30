@@ -10,6 +10,9 @@ from ui.components.settings_sections import (
     TradingTypeSection,
     OperationParamsSection,
     ConfirmDialogHelper,
+    validate_amount,
+    validate_stop_loss,
+    validate_timeframe,
 )
 
 
@@ -282,3 +285,149 @@ def test_confirm_dialog_shows_limit_price_on_switch():
         changes = ConfirmDialogHelper.build_changes_summary(form)
         assert any("Precio Límite" in c for c in changes)
         assert any("Orden" in c for c in changes)
+
+
+# ---------------------------------------------------------------------------
+# Hint explicativo del precio límite (Opción A: texto descriptivo visible)
+# ---------------------------------------------------------------------------
+def test_limit_price_hint_visible_with_limit():
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "LIMIT"
+        mock_settings.LIMIT_PRICE = 65000.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+    assert section._limit_price_field.visible is True
+    assert section._limit_price_hint.visible is True
+
+
+def test_limit_price_hint_hidden_with_market():
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "MARKET"
+        mock_settings.LIMIT_PRICE = 0.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+    assert section._limit_price_field.visible is False
+    assert section._limit_price_hint.visible is False
+
+
+def test_limit_price_hint_toggles_on_order_type_change():
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "LIMIT"
+        mock_settings.LIMIT_PRICE = 65000.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+
+    event = MagicMock(control=MagicMock(value="MARKET"))
+    section._on_order_type_changed(event)
+    assert section._limit_price_hint.visible is False
+
+    event = MagicMock(control=MagicMock(value="LIMIT"))
+    section._on_order_type_changed(event)
+    assert section._limit_price_hint.visible is True
+
+
+def test_limit_price_hint_follows_restore():
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "MARKET"
+        mock_settings.LIMIT_PRICE = 0.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+
+    section.restore({
+        "trading_type": "SPOT", "leverage": 1,
+        "order_type": "LIMIT", "limit_price": 65000.0,
+    })
+    assert section._limit_price_hint.visible is True
+
+    section.restore({
+        "trading_type": "SPOT", "leverage": 1,
+        "order_type": "MARKET", "limit_price": 0.0,
+    })
+    assert section._limit_price_hint.visible is False
+
+
+# ---------------------------------------------------------------------------
+# Validaciones de datos (monto + stop loss + temporalidad) — Opción B
+# ---------------------------------------------------------------------------
+def test_validate_amount():
+    # Válidos
+    assert validate_amount(10.0, "SPOT") is None
+    assert validate_amount(50.0, "FUTURES") is None
+    assert validate_amount(100.0, "FUTURES") is None
+    # Futures con notional < 50 (error Binance -4164)
+    err = validate_amount(49.9, "FUTURES")
+    assert err is not None and "50" in err
+    assert validate_amount(10.0, "FUTURES") is not None
+    # Monto inválido (siempre)
+    assert validate_amount(0.0, "SPOT") is not None
+    assert validate_amount(-5.0, "SPOT") is not None
+    assert validate_amount(0.0, "FUTURES") is not None  # > 0 primero
+
+
+def test_validate_stop_loss():
+    assert validate_stop_loss(1.01, "PERCENT") is None
+    assert validate_stop_loss(0.5, "USDT") is None
+    assert validate_stop_loss(0.0, "PERCENT") is not None
+    assert validate_stop_loss(-1.0, "USDT") is not None
+    # % con tope 100 (distancia > 100% → precio de SL inválido)
+    assert validate_stop_loss(150.0, "PERCENT") is not None
+    assert validate_stop_loss(100.0, "PERCENT") is None
+    # USDT fijo sin tope superior
+    assert validate_stop_loss(500.0, "USDT") is None
+
+
+def test_validate_timeframe():
+    assert validate_timeframe(1) is None
+    assert validate_timeframe(5) is None
+    assert validate_timeframe(0) is not None
+    assert validate_timeframe(-1) is not None
+
+
+def test_get_amount_safe_parse():
+    section = OperationParamsSection()
+    section._amount_field.value = "abc"
+    assert section.get_amount() == 0.0  # sin lanzar ValueError
+    section._amount_field.value = ""
+    assert section.get_amount() == 0.0  # vacío ya no asume 10.0
+    section._amount_field.value = "25.5"
+    assert section.get_amount() == 25.5
+
+
+def test_get_sl_safe_parse():
+    section = OperationParamsSection()
+    section._sl_field.value = "abc"
+    assert section.get_sl() == 0.0
+    section._sl_field.value = ""
+    assert section.get_sl() == 0.0
+    section._sl_field.value = "2.5"
+    assert section.get_sl() == 2.5
+
+
+def test_get_timeframe_safe_parse():
+    section = OperationParamsSection()
+    section._timeframe_field.value = "abc"
+    assert section.get_timeframe() == 0
+    section._timeframe_field.value = ""
+    assert section.get_timeframe() == 0
+    section._timeframe_field.value = "3"
+    assert section.get_timeframe() == 3
+    section._timeframe_field.value = "2.5"
+    assert section.get_timeframe() == 2
+
+
+def test_set_validation_errors_toggles():
+    section = OperationParamsSection()
+    section.set_validation_errors("err monto", "err sl", "err tf")
+    assert section._amount_error.visible
+    assert section._amount_error.value == "err monto"
+    assert section._sl_error.visible
+    assert section._timeframe_error.visible
+
+    section.set_validation_errors(None, None, None)
+    assert not section._amount_error.visible
+    assert not section._sl_error.visible
+    assert not section._timeframe_error.visible

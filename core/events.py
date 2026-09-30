@@ -69,6 +69,7 @@ class OrderExecutedEvent:
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
     limit_price: float = 0.0           # precio límite original (0 si MARKET)
     operation_id: str = ""          # OC-xxx / OV-xxx (id de la operación, no del executor)
+    purpose: Literal["ENTRY", "EXIT"] = "ENTRY"  # apertura vs cierre (paper_balance)
     timestamp: float = field(default_factory=time.time)
 
 
