@@ -58,6 +58,11 @@ def _published(mock_bus, event_type):
     ]
 
 
+def _enqueued(mock_queue):
+    """Tipos de eventos pasados a db_queue.enqueue, en orden."""
+    return [type(c.args[0]) for c in mock_queue.enqueue.call_args_list]
+
+
 def _make_op(side="BUY", state="ACTIVE", entry_filled=False):
     return TradingOperation(
         side=side, state=state,
@@ -117,7 +122,7 @@ async def test_entry_limit_registers_working_order():
         assert placed[0].price == 65000.0
         assert placed[0].operation_id == "OC-TEST01"
         assert placed[0].order_type == "LIMIT"
-        db.enqueue_order_placed.assert_called_once()
+        assert _enqueued(db) == [OrderPlacedEvent]
         assert _published(bus, OrderExecutedEvent) == []
 
 
@@ -179,7 +184,7 @@ async def test_paper_tick_crossing_completes_fill():
         assert executed[0].operation_id == "OC-TEST01"
         assert op.entry_filled is True
         assert engine._working_orders == {}
-        db.enqueue_order.assert_called_once()
+        assert _enqueued(db) == [OrderPlacedEvent, OrderExecutedEvent]
 
 
 @pytest.mark.asyncio
@@ -250,7 +255,7 @@ async def test_cancel_working_orders_publishes_canceled():
         assert len(events) == 1
         assert events[0].reason == "test_reason"
         assert events[0].operation_id == "OC-TEST01"
-        db.enqueue_order_canceled.assert_called_once()
+        assert _enqueued(db) == [OrderPlacedEvent, OrderCanceledEvent]
 
 
 @pytest.mark.asyncio
@@ -368,6 +373,7 @@ async def test_settings_change_replaces_entry_when_bot_active():
     """Cancelar por settings_changed deja la ACTIVE sin orden → se recoloca."""
     engine = _engine()
     engine._active = True
+    engine._cycles_completed = 1   # heal gateado a post-primer-ciclo
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
          patch("services.bot_engine.db_queue"):
@@ -400,6 +406,7 @@ async def test_settings_update_heals_orphan_without_settings_change():
     """La ACTIVE sin fill y sin orden se recoloca aunque nada se invalidó."""
     engine = _engine()
     engine._active = True
+    engine._cycles_completed = 1   # heal gateado a post-primer-ciclo
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
          patch("services.bot_engine.db_queue"):
@@ -439,6 +446,7 @@ async def test_settings_update_does_not_heal_when_paused():
 async def test_settings_update_does_not_duplicate_working_order():
     engine = _engine()
     engine._active = True
+    engine._cycles_completed = 1   # heal activo: probar el guard de working
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
          patch("services.bot_engine.db_queue"):
@@ -460,10 +468,10 @@ async def test_settings_update_does_not_duplicate_working_order():
 
 
 # ---------------------------------------------------------------------------
-# Arranque: solo la operación ACTIVE recibe orden
+# Fin de ciclo: solo la operación ACTIVE recibe orden (ENTRY ⇒ ciclo)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_execute_initial_orders_dispatches_only_active():
+async def test_dispatch_active_entry_if_needed_only_active():
     engine = _engine()
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
@@ -478,7 +486,7 @@ async def test_execute_initial_orders_dispatches_only_active():
         )
         engine._operations = [active, pending]
 
-        await engine._execute_initial_orders()
+        await engine._dispatch_active_entry_if_needed()
 
         placed = _published(bus, OrderPlacedEvent)
         assert len(placed) == 1                      # la PENDING no recibe orden
@@ -488,7 +496,40 @@ async def test_execute_initial_orders_dispatches_only_active():
 
 
 @pytest.mark.asyncio
-async def test_execute_initial_orders_emits_initial_order_event_on_fill():
+async def test_dispatch_active_entry_if_needed_is_idempotent():
+    """Sin fill y con orden working: un segundo ciclo no duplica la ENTRY."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op(side="BUY", state="ACTIVE")]
+
+        await engine._dispatch_active_entry_if_needed()
+        await engine._dispatch_active_entry_if_needed()
+
+        assert len(_published(bus, OrderPlacedEvent)) == 1
+        assert len(engine._working_orders) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_active_entry_if_needed_skips_filled():
+    """Ya con fill: no se vuelve a colocar entrada en ciclos siguientes."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op(side="BUY", state="ACTIVE", entry_filled=True)]
+
+        await engine._dispatch_active_entry_if_needed()
+
+        assert _published(bus, OrderPlacedEvent) == []
+        assert _published(bus, OrderExecutedEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_active_entry_emits_initial_order_event_on_fill():
     """La factory compartida (_initial_order_factory) publica al llenar."""
     engine = _engine()
     with patch("services.bot_engine.settings", _make_settings(order_type="MARKET")), \
@@ -504,7 +545,7 @@ async def test_execute_initial_orders_emits_initial_order_event_on_fill():
         )
         engine._operations = [active, pending]
 
-        await engine._execute_initial_orders()
+        await engine._dispatch_active_entry_if_needed()
 
         executed = _published(bus, OrderExecutedEvent)
         assert len(executed) == 1
@@ -514,6 +555,160 @@ async def test_execute_initial_orders_emits_initial_order_event_on_fill():
         assert initials[0].side == "BUY"
         assert active.entry_filled is True
         assert pending.entry_filled is False
+
+
+# ---------------------------------------------------------------------------
+# ENTRY ⇒ fin de ciclo: arranque/stop sin órdenes (bug start/stop)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_trading_places_no_orders():
+    """El arranque crea OC(a)+OV(p) y timer, pero NO coloca ninguna orden."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+        try:
+            started = await engine._start_trading()
+
+            assert started is True
+            assert len(engine._operations) == 2
+            assert engine._operations[0].state == "ACTIVE"
+            assert engine._operations[1].state == "PENDING"
+            assert engine._cycles_completed == 0
+            assert engine._working_orders == {}
+            assert _published(bus, OrderPlacedEvent) == []
+            assert _published(bus, OrderExecutedEvent) == []
+        finally:
+            engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_first_cycle_tick_dispatches_active_entry():
+    """El primer fin de ciclo coloca la ENTRY de la ACTIVE (único punto)."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+        try:
+            assert await engine._start_trading() is True
+            bus.publish.reset_mock()          # aislar los eventos del tick
+
+            await engine._on_timeframe_tick()
+
+            assert engine._cycles_completed == 1
+            placed = _published(bus, OrderPlacedEvent)
+            assert len(placed) == 1           # PENDING no recibe orden
+            assert placed[0].operation_id == engine._operations[0].order_id
+            assert placed[0].side == "BUY"
+            assert len(engine._working_orders) == 1
+        finally:
+            engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_second_cycle_tick_does_not_duplicate_entry():
+    """La ENTRY sigue working (sin fill): el ciclo siguiente no duplica."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+        try:
+            assert await engine._start_trading() is True
+            bus.publish.reset_mock()
+
+            await engine._on_timeframe_tick()
+            await engine._on_timeframe_tick()
+
+            assert engine._cycles_completed == 2
+            assert len(_published(bus, OrderPlacedEvent)) == 1
+            assert len(engine._working_orders) == 1
+        finally:
+            engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_stop_before_first_cycle_emits_no_orders():
+    """Stop dentro del primer ciclo: cero órdenes emitidas, ops eliminadas."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings", _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+        assert await engine._start_trading() is True
+        bus.publish.reset_mock()              # aislar los eventos del stop
+
+        await engine._stop_trading()
+
+        assert _published(bus, OrderPlacedEvent) == []
+        assert _published(bus, OrderExecutedEvent) == []
+        assert _published(bus, OrderCanceledEvent) == []
+        assert engine._operations == []
+
+
+@pytest.mark.asyncio
+async def test_settings_update_before_first_cycle_does_not_place_entry():
+    """Heal gateado: settings en el primer ciclo no coloca la ENTRY antes."""
+    engine = _engine()
+    engine._active = True                     # _cycles_completed == 0
+    with patch("services.bot_engine.settings", _make_settings()), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        engine._operations = [_make_op()]     # ACTIVE sin fill, sin orden
+
+        await engine._on_settings_updated(SettingsUpdatedEvent(
+            symbol="BTCUSDT", mode="PAPER", trading_type="SPOT",
+            leverage=1, order_type="LIMIT", limit_price=65000.0,
+        ))
+
+        assert engine._working_orders == {}
+        assert _published(bus, OrderPlacedEvent) == []
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_defers_promoted_entry_to_next_cycle():
+    """Decisión B: el SL cierra inmediato (EXIT) pero la ENTRY de la
+    promovida espera al siguiente fin de ciclo."""
+    engine = _engine()
+    with patch("services.bot_engine.settings", _make_settings(limit_price=67000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 66000.0
+        active = _make_op(side="BUY", entry_filled=True)
+        pending = TradingOperation(
+            side="SELL", state="PENDING",
+            entry_price=64900.0, stop_loss=65100.0,
+            quantity=0.001, order_id="OV-TEST01",
+            entry_filled=False,
+        )
+        engine._operations = [active, pending]
+
+        await engine._execute_stop_loss(active, 64900.0)
+
+        # EXIT inmediato: solo el cierre del SL (lado invertido)
+        executed = _published(bus, OrderExecutedEvent)
+        assert len(executed) == 1
+        assert executed[0].side == "SELL"
+        assert executed[0].purpose == "EXIT"
+        assert active.state == "PAST"
+
+        # Promovida a ACTIVE pero SIN entrada aún (deferida al ciclo)
+        promoted = [op for op in engine._operations if op.state == "ACTIVE"]
+        assert len(promoted) == 1
+        assert promoted[0].order_id == "OV-TEST01"
+        assert promoted[0].entry_filled is False
+        assert engine._working_orders == {}
+
+        bus.publish.reset_mock()
+        await engine._on_timeframe_tick()      # fin de ciclo siguiente
+
+        placed = _published(bus, OrderPlacedEvent)
+        assert len(placed) == 1
+        assert placed[0].operation_id == "OV-TEST01"
+        assert placed[0].side == "SELL"
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +813,7 @@ async def test_timeframe_tick_keeps_existing_quantity_when_sizing_fails():
 async def test_order_failed_heals_orphan_entry():
     engine = _engine()
     engine._active = True
+    engine._cycles_completed = 1   # heal gateado a post-primer-ciclo
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
          patch("services.bot_engine.db_queue"):
@@ -639,6 +835,7 @@ async def test_order_failed_respects_cooldown():
     """Un segundo fallo dentro del cooldown no vuelve a despachar (sin bucle)."""
     engine = _engine()
     engine._active = True
+    engine._cycles_completed = 1   # heal gateado a post-primer-ciclo
     with patch("services.bot_engine.settings", _make_settings()), \
          patch("services.bot_engine.event_bus") as bus, \
          patch("services.bot_engine.db_queue"):

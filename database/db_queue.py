@@ -2,22 +2,32 @@
 DB Queue Worker — Escrituras asíncronas sin bloquear el Event Loop.
 
 REGLA: Las escrituras en DB NUNCA bloquean la recepción de eventos de mercado.
-Todas las operaciones de escritura se encolan en asyncio.Queue y las procesa
+Todas las operaciones de escritura se encolan en colas asyncio y las procesa
 un worker en background de forma separada.
 
+Dos carriles con política distinta (separación que impide head-of-line):
+
+  _CRITICAL   Órdenes (FILLED / PENDING / CANCELLED). Cola ILIMITADA: una orden
+              jamás se descarta, aunque la DB se atasque. Si el backlog supera
+              la marca alta, se avisa con log con throttle.
+  _DROPPABLE  Ticks, actualizaciones de operación y de posición. Cola ACOTADA:
+              si se llena se descarta el MÁS VIEJO, conservando lo más fresco
+              (solo es seguro tirar "el más viejo" porque este carril no
+              comparte cola con las órdenes).
+
+Rutas declaradas en `_routes` (OCP): persistir un evento nuevo = añadir una
+entrada, sin tocar el loop ni el método `enqueue`.
+
 Uso:
-    await db_queue.enqueue_tick(tick_event)
-    await db_queue.enqueue_order(order_event)
-    await db_queue.enqueue_operation_update(event)
-    await db_queue.enqueue_position_update(event)
+    db_queue.enqueue(tick_event)     # síncrono, no bloqueante
+    db_queue.enqueue(order_event)
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
-from typing import Union
+from typing import Any, Awaitable, Callable
 
 from config.settings import settings
 from database.connection import get_session
@@ -36,47 +46,28 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Items de la cola
+# Política de carriles
 # ---------------------------------------------------------------------------
 
-@dataclass
-class _TickWriteItem:
-    event: PriceTickEvent
+_CRITICAL = "critical"
+_DROPPABLE = "droppable"
 
+#: Tamaño máximo del carril descartable. A ~2.5 escrituras/s son ~7 minutos
+#: de margen antes de empezar a descartar.
+_DROPPABLE_MAXSIZE = 1000
 
-@dataclass
-class _OrderWriteItem:
-    event: OrderExecutedEvent
+#: Backlog de órdenes que dispara la alarma (informativa: este carril no dropa).
+_CRITICAL_HIGH_WATER = 100
 
+#: Segundos mínimos entre avisos repetidos (drops y backlog).
+_LOG_THROTTLE_S = 30.0
 
-@dataclass
-class _OrderPlacedItem:
-    event: OrderPlacedEvent
+#: Eventos que se persisten vía suscripción al EventBus (el resto los encolan
+#: los servicios directamente con `enqueue`, para garantizar orden PENDING→FILLED).
+_SUBSCRIBED_EVENTS: tuple[type, ...] = (OperationUpdateEvent, PositionUpdateEvent)
 
-
-@dataclass
-class _OrderCanceledItem:
-    event: OrderCanceledEvent
-
-
-@dataclass
-class _OperationUpdateItem:
-    event: OperationUpdateEvent
-
-
-@dataclass
-class _PositionUpdateItem:
-    event: PositionUpdateEvent
-
-
-_QueueItem = Union[
-    _TickWriteItem,
-    _OrderWriteItem,
-    _OrderPlacedItem,
-    _OrderCanceledItem,
-    _OperationUpdateItem,
-    _PositionUpdateItem,
-]
+_Saver = Callable[[Any], Awaitable[None]]
+_Route = tuple[str, _Saver]
 
 
 # ---------------------------------------------------------------------------
@@ -84,58 +75,97 @@ _QueueItem = Union[
 # ---------------------------------------------------------------------------
 
 class DBQueueWorker:
-    """Worker singleton que procesa escrituras en DB desde una cola async."""
+    """Worker singleton que procesa escrituras en DB desde colas async."""
 
-    def __init__(self, maxsize: int = 1000) -> None:
-        self._queue: asyncio.Queue[_QueueItem] = asyncio.Queue(maxsize=maxsize)
+    def __init__(
+        self,
+        *,
+        droppable_maxsize: int = _DROPPABLE_MAXSIZE,
+        critical_high_water: int = _CRITICAL_HIGH_WATER,
+    ) -> None:
+        # Cola crítica ILIMITADA (maxsize=0): put_nowait nunca lanza QueueFull.
+        self._critical: asyncio.Queue[Any] = asyncio.Queue()
+        self._droppable: asyncio.Queue[Any] = asyncio.Queue(maxsize=droppable_maxsize)
+        self._wakeup = asyncio.Event()
         self._running: bool = False
         self._task: asyncio.Task | None = None
+
+        self._critical_high_water = critical_high_water
+        self._dropped: int = 0
+        self._last_drop_log: float = 0.0
+        self._last_backlog_log: float = 0.0
+
+        self._routes: dict[type, _Route] = {
+            OrderExecutedEvent: (_CRITICAL, self._save_order),
+            OrderPlacedEvent: (_CRITICAL, self._save_order_placed),
+            OrderCanceledEvent: (_CRITICAL, self._save_order_canceled),
+            PriceTickEvent: (_DROPPABLE, self._save_tick),
+            OperationUpdateEvent: (_DROPPABLE, self._save_operation_update),
+            PositionUpdateEvent: (_DROPPABLE, self._save_position_update),
+        }
 
     # ------------------------------------------------------------------
     # Encolar operaciones (llamar desde servicios)
     # ------------------------------------------------------------------
 
-    def enqueue_tick(self, event: PriceTickEvent) -> None:
-        """Encola un tick de precio para guardar en DB. No bloqueante."""
-        try:
-            self._queue.put_nowait(_TickWriteItem(event))
-        except asyncio.QueueFull:
-            log.warning("DB queue full, dropping tick for %s", event.symbol)
+    def enqueue(self, event: Any) -> bool:
+        """Encola un evento para persistencia. Síncrono, no bloqueante.
 
-    def enqueue_order(self, event: OrderExecutedEvent) -> None:
-        """Encola una orden ejecutada (FILLED) para guardar en DB. No bloqueante."""
-        try:
-            self._queue.put_nowait(_OrderWriteItem(event))
-        except asyncio.QueueFull:
-            log.warning("DB queue full, dropping order %s", event.order_id)
+        Devuelve False si el evento no tiene ruta de persistencia. Una orden
+        nunca se descarta; solo el carril descartable puede soltar elementos,
+        y siempre los más viejos.
+        """
+        route = self._routes.get(type(event))
+        if route is None:
+            log.debug("DBQueue: sin ruta para %s", type(event).__name__)
+            return False
 
-    def enqueue_order_placed(self, event: OrderPlacedEvent) -> None:
-        """Encola una orden LIMIT placed (status PENDING). No bloqueante."""
-        try:
-            self._queue.put_nowait(_OrderPlacedItem(event))
-        except asyncio.QueueFull:
-            log.warning("DB queue full, dropping placed order %s", event.order_id)
+        if route[0] == _CRITICAL:
+            self._critical.put_nowait(event)
+            self._watch_backlog()
+        else:
+            self._put_droppable(event)
 
-    def enqueue_order_canceled(self, event: OrderCanceledEvent) -> None:
-        """Encola la cancelación de una orden LIMIT (status CANCELLED). No bloqueante."""
-        try:
-            self._queue.put_nowait(_OrderCanceledItem(event))
-        except asyncio.QueueFull:
-            log.warning("DB queue full, dropping canceled order %s", event.order_id)
+        self._wakeup.set()
+        return True
 
-    def enqueue_operation_update(self, event: OperationUpdateEvent) -> None:
-        """Encola una actualización de operación para guardar en DB. No bloqueante."""
+    def _put_droppable(self, event: Any) -> None:
+        """Encola en el carril descartable; si está lleno, tira el más viejo."""
         try:
-            self._queue.put_nowait(_OperationUpdateItem(event))
+            self._droppable.put_nowait(event)
         except asyncio.QueueFull:
-            log.warning("DB queue full, dropping operation update")
+            try:
+                self._droppable.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            self._droppable.put_nowait(event)
+            self._log_drop(event)
 
-    def enqueue_position_update(self, event: PositionUpdateEvent) -> None:
-        """Encola una actualización de posición para guardar en DB. No bloqueante."""
-        try:
-            self._queue.put_nowait(_PositionUpdateItem(event))
-        except asyncio.QueueFull:
-            log.warning("DB queue full, dropping position update")
+    def _log_drop(self, event: Any) -> None:
+        """Cuenta drops (total de por vida) y avisa como mucho 1 vez cada 30 s."""
+        self._dropped += 1
+        now = time.monotonic()
+        if now - self._last_drop_log < _LOG_THROTTLE_S:
+            return
+        self._last_drop_log = now
+        log.warning(
+            "DB queue descartable llena: %d escritura(s) descartada(s) en total "
+            "(última: %s) — el worker no está drenando",
+            self._dropped, type(event).__name__,
+        )
+
+    def _watch_backlog(self) -> None:
+        """Alarma informativa si la cola de órdenes crece demasiado."""
+        pending = self._critical.qsize()
+        if pending < self._critical_high_water:
+            return
+        now = time.monotonic()
+        if now - self._last_backlog_log < _LOG_THROTTLE_S:
+            return
+        self._last_backlog_log = now
+        log.warning(
+            "DB critical backlog: %d escritura(s) de órdenes pendiente(s)", pending
+        )
 
     # ------------------------------------------------------------------
     # Ciclo de vida
@@ -147,16 +177,15 @@ class DBQueueWorker:
         self._running = True
         self._task = asyncio.create_task(self._worker_loop(), name="db_queue_worker")
 
-        # Suscribirse a eventos para persistencia
-        event_bus.subscribe(OperationUpdateEvent, self._on_operation_update)
-        event_bus.subscribe(PositionUpdateEvent, self._on_position_update)
+        for event_type in _SUBSCRIBED_EVENTS:
+            event_bus.subscribe(event_type, self._on_bus_event)
 
         log.info("DBQueueWorker started")
 
     async def stop(self) -> None:
         self._running = False
-        event_bus.unsubscribe(OperationUpdateEvent, self._on_operation_update)
-        event_bus.unsubscribe(PositionUpdateEvent, self._on_position_update)
+        for event_type in _SUBSCRIBED_EVENTS:
+            event_bus.unsubscribe(event_type, self._on_bus_event)
         if self._task:
             self._task.cancel()
             try:
@@ -169,13 +198,9 @@ class DBQueueWorker:
     # Handlers de eventos
     # ------------------------------------------------------------------
 
-    async def _on_operation_update(self, event: OperationUpdateEvent) -> None:
-        """Handler directo — encola para escritura."""
-        self.enqueue_operation_update(event)
-
-    async def _on_position_update(self, event: PositionUpdateEvent) -> None:
-        """Handler directo — encola para escritura."""
-        self.enqueue_position_update(event)
+    async def _on_bus_event(self, event: Any) -> None:
+        """Handler del EventBus — encola para escritura."""
+        self.enqueue(event)
 
     # ------------------------------------------------------------------
     # Loop interno
@@ -184,27 +209,39 @@ class DBQueueWorker:
     async def _worker_loop(self) -> None:
         while self._running:
             try:
-                item = await self._queue.get()
-                await self._process(item)
-                self._queue.task_done()
+                # clear ANTES de mirar: un put posterior ya deja la señal puesta
+                # y hace que wait() devuelva de inmediato (sin wakeup perdido).
+                self._wakeup.clear()
+                event = self._pop()
+                if event is None:
+                    await self._wakeup.wait()
+                    continue
+                await self._process(event)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 log.exception("DBQueueWorker error: %s", exc)
 
-    async def _process(self, item: _QueueItem) -> None:
-        if isinstance(item, _TickWriteItem):
-            await self._save_tick(item.event)
-        elif isinstance(item, _OrderWriteItem):
-            await self._save_order(item.event)
-        elif isinstance(item, _OrderPlacedItem):
-            await self._save_order_placed(item.event)
-        elif isinstance(item, _OrderCanceledItem):
-            await self._save_order_canceled(item.event)
-        elif isinstance(item, _OperationUpdateItem):
-            await self._save_operation_update(item.event)
-        elif isinstance(item, _PositionUpdateItem):
-            await self._save_position_update(item.event)
+    def _pop(self) -> Any | None:
+        """Extrae el siguiente evento: las órdenes SIEMPRE antes que los ticks."""
+        for queue in (self._critical, self._droppable):
+            try:
+                return queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        return None
+
+    async def _process(self, event: Any) -> None:
+        """Despacha según el registro de rutas (sin cadena isinstance)."""
+        route = self._routes.get(type(event))
+        if route is None:
+            log.debug("DBQueue: sin ruta para %s", type(event).__name__)
+            return
+        await route[1](event)
+
+    # ------------------------------------------------------------------
+    # Persistencia
+    # ------------------------------------------------------------------
 
     async def _save_tick(self, event: PriceTickEvent) -> None:
         try:

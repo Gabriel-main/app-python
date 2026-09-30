@@ -330,7 +330,7 @@ class BinanceService:
 
                     tick = self._parse_binance_ticker(msg)
                     event_bus.publish(tick)
-                    db_queue.enqueue_tick(tick)
+                    db_queue.enqueue(tick)
 
         except (BinanceAPIException, BinanceRequestException) as exc:
             log.error("Binance API exception (%s): %s", settings.TRADING_TYPE, exc)
@@ -525,7 +525,7 @@ class BinanceService:
         while self._running:
             tick = self._mock.next_tick(settings.TRADING_SYMBOL)
             event_bus.publish(tick)
-            db_queue.enqueue_tick(tick)
+            db_queue.enqueue(tick)
             await asyncio.sleep(interval)
 
     # ------------------------------------------------------------------
