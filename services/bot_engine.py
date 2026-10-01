@@ -181,11 +181,6 @@ class BotEngine:
         # Operaciones
         self._operations: list[TradingOperation] = []
 
-        # Ciclos de temporalidad completados desde el arranque.
-        # Gate de heal: 0 := primer ciclo aún no terminó → ninguna ENTRY
-        # puede colocarse fuera del fin de ciclo (invariante ENTRY ⇒ ciclo).
-        self._cycles_completed: int = 0
-
         # Órdenes LIMIT working (id canónico → WorkingOrder).
         # Única fuente de verdad de fills: pop() idempotente := "primer ganador".
         self._working_orders: dict[str, WorkingOrder] = {}
@@ -563,7 +558,6 @@ class BotEngine:
             return False
         quantity = sized.quantity
         self._reset_heal_state()
-        self._cycles_completed = 0  # ninguna ENTRY aún: el primer ciclo arma
 
         buy_op = self._create_operation("BUY", "ACTIVE", pa, sl_dist, quantity)
         sell_op = self._create_operation("SELL", "PENDING", pa, sl_dist, quantity)
@@ -583,26 +577,29 @@ class BotEngine:
             data={"pa": pa, "sl_dist": sl_dist, "operations": 2},
         ))
 
-        # Sin dispatch de ENTRY aquí: la entrada de la ACTIVE se coloca en el
-        # primer fin de ciclo (_on_timeframe_tick → _dispatch_active_entry…).
+        # Q1: la ENTRY de la operación ACTIVE se coloca AL INICIO (paso 1
+        # del diagrama: "se ejecutan las 2 operaciones a la vez").
+        await self._place_entry(buy_op)
+
         self._publish_update()
         self._start_timeframe_timer()
         return True
 
     async def _stop_trading(self) -> None:
-        """Detiene trading: cancela órdenes working, cierra posiciones y apaga timer."""
+        """Detiene trading: elimina PENDING, cancela working y apaga timer.
+
+        Q3(B): el stop NO vende posiciones abiertas — solo retira la
+        operación pendiente y apaga el bot.
+        """
+        self._active = False  # gate temprano: tareas de SL en vuelo no promueven
         self._stop_timeframe_timer()
 
-        # Cancelar órdenes LIMIT working ANTES de cerrar posiciones
-        # (las ops sin fill no se cierran: no hay posición)
+        # Cancelar órdenes LIMIT working (ENTRY sin fill no tiene posición)
         if self._working_orders:
             await self._cancel_working_orders(lambda w: True, "bot_stop")
 
-        # Cerrar posiciones abiertas
-        await self._close_open_positions()
-
-        # Eliminar operaciones pendientes
-        self._operations = [op for op in self._operations if op.state == "ACTIVE"]
+        # Eliminar operaciones pendientes y terminadas
+        self._retain_live()
 
         # Marcar activas como past (State Pattern: transición validada)
         for op in self._operations:
@@ -667,6 +664,15 @@ class BotEngine:
             quantity=quantity,
             order_id=f"{prefix}-{uuid.uuid4().hex[:8].upper()}",
         )
+
+    def _retain_live(self) -> None:
+        """Deja solo operaciones vigentes (ACTIVE); retira PENDING/PAST.
+
+        Único punto de retiro de la lista (DRY): lo usan `_stop_trading` y
+        `_on_timeframe_tick`. Las terminadas ya fueron publicadas con estado
+        PAST (db_queue estampa closed_at; audit las registra).
+        """
+        self._operations = [op for op in self._operations if op.state == "ACTIVE"]
 
     def _should_insert_pending(self, op: TradingOperation, pa: float) -> bool:
         """Evalúa si se debe insertar una nueva operación PENDING según el diagrama.
@@ -756,18 +762,14 @@ class BotEngine:
 
         Flujo según diagrama:
         1. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
-        2. Eliminar TODAS las operaciones PENDING
+        2. Retirar operaciones PAST y TODAS las PENDING
         3. Crear NUEVA operación PENDING con datos actualizados
-        4. Despachar la ENTRY de la ACTIVE si aún no se colocó/filló
+        4. Colocar la ENTRY de la ACTIVE si aún no se colocó/filló (repair)
 
-        Invariante ENTRY ⇒ fin de ciclo: este es el ÚNICO punto (más el
-        repair de heal, gateado a _cycles_completed > 0) donde se colocan
-        órdenes ENTRY — incluida la PENDING promovida tras un SL.
+        La ENTRY inicial va al arranque (Q1) y la promovida tras un SL es
+        inmediata (Q2): este paso 4 solo cubre el repair de una entrada
+        que quedó sin orden (idempotente — no duplica working).
         """
-        # El ciclo YA expiró: se cuenta aunque el tick no encuentre ops
-        # (abre el gate de heal para el resto de la sesión).
-        self._cycles_completed += 1
-
         if not self._operations:
             return
 
@@ -796,12 +798,12 @@ class BotEngine:
         # 2. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
         self._update_sl_on_tick(active_op, pa, sl_dist)
 
-        # 3. Eliminar TODAS las operaciones PENDING (y cancelar sus órdenes
-        #    LIMIT working asociadas — sus operaciones dejan de existir)
+        # 3. Retirar operaciones terminadas (PAST) y TODAS las PENDING
+        #    (y cancelar sus órdenes LIMIT working asociadas)
         discarded_ids = {
             op.order_id for op in self._operations if op.state == "PENDING"
         }
-        self._operations = [op for op in self._operations if op.state != "PENDING"]
+        self._retain_live()
         if discarded_ids:
             await self._cancel_working_orders(
                 lambda w: w.operation.order_id in discarded_ids,
@@ -816,9 +818,10 @@ class BotEngine:
         log.info("Timeframe update: ACTIVE=%s, NEW PENDING=%s",
                  active_op.order_id, new_pending.order_id)
 
-        # 4. ENTRY al fin de ciclo: despacha la entrada de la ACTIVE si aún
-        #    no fue colocada (idempotente — no duplica orden working).
-        await self._dispatch_active_entry_if_needed()
+        # 4. Repair de ENTRY: si la ACTIVE quedó sin orden (falla/heal),
+        #    el fin de ciclo la recoloca (idempotente — no duplica).
+        for op in self._operations:
+            await self._place_entry(op)
 
         event_bus.publish(TimeframeCycleEvent(
             pa=pa,
@@ -915,13 +918,20 @@ class BotEngine:
         if order_event is None:
             return
 
+        # Race guard: el usuario detuvo el bot mientras el EXIT estaba en
+        # vuelo → no promover ni colocar entrada de la PENDING.
+        if not self._active:
+            log.info("Bot stopped during SL execution — skipping promotion")
+            return
+
         # State Pattern: transición validada ACTIVE → PAST
         op.mark_as_past()
 
-        # Fase 1: promover PENDING → ACTIVE. Su ENTRY NO se despacha aquí:
-        # invariante ENTRY ⇒ fin de ciclo — la coloca el próximo tick
-        # (_dispatch_active_entry_if_needed). EXIT de arriba sí es inmediato.
-        self._promote_pending_to_active()
+        # Q2: promover PENDING → ACTIVE y colocar su ENTRY de inmediato
+        # ("dentro del tiempo" — paso 2 del diagrama).
+        promoted = self._promote_pending_to_active()
+        if promoted is not None:
+            await self._place_entry(promoted)
         self._publish_update()
 
         log.info("SL executed, operation marked PAST: %s", op.order_id)
@@ -1258,7 +1268,7 @@ class BotEngine:
     def _initial_order_factory(
         op: TradingOperation,
     ) -> Callable[[OrderExecutedEvent], InitialOrderEvent]:
-        """Factory de InitialOrderEvent para una entrada (DRY: fin de ciclo + heal)."""
+        """Factory de InitialOrderEvent para una entrada (DRY: todos los call sites de _place_entry)."""
         def factory(e: OrderExecutedEvent) -> InitialOrderEvent:
             return InitialOrderEvent(
                 order_id=e.order_id,
@@ -1268,28 +1278,32 @@ class BotEngine:
             )
         return factory
 
-    async def _dispatch_active_entry_if_needed(self) -> None:
-        """Despacha la ENTRY de la operación ACTIVE si aún no fue colocada.
+    def _entry_needed(self, op: TradingOperation) -> bool:
+        """Predicado puro (SRP): True si la operación ACTIVE aún necesita ENTRY.
 
-        Único punto de colocación de ENTRY (invariante ENTRY ⇒ fin de ciclo):
-        lo llama `_on_timeframe_tick` en cada expiración. Idempotente — si la
-        ACTIVE ya llenó o ya tiene orden working, no duplica.
-
-        La PENDING nunca recibe orden aquí: su entrada se coloca cuando la
-        promoción PENDING → ACTIVE vuelva a pasar por este camino en un fin
-        de ciclo (despacharla antes abriría una posición huérfana: state
-        != ACTIVE la salta el SL).
+        No coloca nada — solo responde. Usado por `_place_entry` (guard) y
+        por `_heal_orphan_entry` (detección de huérfana).
         """
-        for op in self._operations:
-            if op.state != "ACTIVE" or op.entry_filled:
-                continue
-            if any(w.operation is op for w in self._working_orders.values()):
-                continue  # ya tiene orden working (fill pendiente)
-            await self._dispatch_order(
-                op,
-                success_event_factory=self._initial_order_factory(op),
-                purpose="ENTRY",
-            )
+        if op.state != "ACTIVE" or op.entry_filled:
+            return False
+        # Ya tiene orden working (fill pendiente): no duplicar
+        return not any(w.operation is op for w in self._working_orders.values())
+
+    async def _place_entry(self, op: TradingOperation) -> bool:
+        """Único punto de colocación de ENTRY (DRY).
+
+        Idempotente: si la op no necesita entrada (state/fill/working), no
+        hace nada. El orden de call sites: arranque (Q1), promoción tras
+        SL (Q2), fin de ciclo (tick) y heal.
+        """
+        if not self._entry_needed(op):
+            return False
+        await self._dispatch_order(
+            op,
+            success_event_factory=self._initial_order_factory(op),
+            purpose="ENTRY",
+        )
+        return True
 
     async def _heal_orphan_entry(self) -> None:
         """Recoloca la entrada de una operación ACTIVE sin fill y sin orden.
@@ -1297,50 +1311,22 @@ class BotEngine:
         Cuando `_cancel_working_orders(..., "settings_changed")` deja una op
         huérfana, el bot queda muerto: sin fill no hay SL (`_check_stop_losses`
         hace gate sobre `entry_filled`), sin SL no hay promoción de la PENDING.
-        Idempotente: si la op ya tiene orden working, no duplica.
+        Idempotente (vía `_entry_needed`): si la op ya tiene orden working,
+        no duplica.
         """
         if not self._active:
-            return  # bot pausado: al arrancar `_start_trading` despacha fresco
-        if self._cycles_completed == 0:
-            # Primer ciclo aún no terminó: ninguna ENTRY fuera del fin de
-            # ciclo (un settings_updated no debe colocar la entrada antes de
-            # tiempo). El tick la despacha cuando corresponda.
-            return
+            return  # bot pausado: al arrancar `_start_trading` coloca fresco
 
         for op in self._operations:
-            if op.state != "ACTIVE" or op.entry_filled:
+            if not self._entry_needed(op):
                 continue
-            if any(w.operation is op for w in self._working_orders.values()):
-                continue  # ya tiene orden working
 
             log.warning(
                 "Orphan ENTRY detected (%s, %s) — re-placing",
                 op.order_id, op.side,
             )
-            await self._dispatch_order(
-                op,
-                success_event_factory=self._initial_order_factory(op),
-                purpose="ENTRY",
-            )
+            await self._place_entry(op)
             return  # solo existe una op ACTIVE
-
-    async def _close_open_positions(self) -> None:
-        """Cierra todas las posiciones abiertas al detener el bot."""
-        for op in self._operations:
-            if op.state != "ACTIVE":
-                continue
-            if not op.entry_filled:
-                # Sin fill no hay posición que cerrar (solo había orden
-                # working — ya cancelada por el caller)
-                continue
-
-            log.info("Closing position: %s %s", op.side, op.order_id)
-
-            # 2c: pasar el op ORIGINAL (no un close_op con prefijo CLOSE-).
-            # Así event.operation_id == op.order_id y paper_balance encuentra
-            # la posición por su clave (OC-/OV-). El lado lo invierte
-            # _build_order_request(vía purpose="EXIT").
-            await self._dispatch_order(op, self._current_price, purpose="EXIT")
 
     # ------------------------------------------------------------------
     # Helpers

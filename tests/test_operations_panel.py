@@ -5,8 +5,9 @@ Opción C: el badge solo aplica mientras la orden LIMIT de entrada siga
 working. En PAST la orden ya fue cancelada, así que no hay nada pendiente.
 """
 import flet as ft
+import pytest
 
-from core.events import OperationState
+from core.events import OperationState, OperationUpdateEvent
 from ui.components.badges import Badge
 from ui.components.operations_panel import (
     OperationsPanel,
@@ -138,3 +139,50 @@ def test_refresh_ui_clears_cards_when_empty():
     panel._refresh_ui()
     assert panel._operations_column.controls == []
     assert panel._empty_text.visible is True
+
+
+# ---------------------------------------------------------------------------
+# _on_operation_update: el panel muestra solo operaciones vigentes (F1)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_on_operation_update_filters_past():
+    """El snapshot completo trae PAST (db/audit), el panel los filtra."""
+    panel = OperationsPanel()
+    event = OperationUpdateEvent(
+        operations=[
+            _op(state="PAST", order_id="OC-PAST1"),
+            _op(state="PAST", order_id="OV-PAST2"),
+            _op(state="ACTIVE", order_id="OC-LIVE"),
+            _op(state="PENDING", order_id="OV-WAIT"),
+        ],
+        timeframe_remaining=30.0,
+        timeframe_total=60.0,
+    )
+
+    await panel._on_operation_update(event)
+
+    assert [c._op_order_id for c in panel._operations_column.controls] == [
+        "OC-LIVE", "OV-WAIT",
+    ]
+    assert [op.state for op in panel._operations] == ["ACTIVE", "PENDING"]
+
+
+@pytest.mark.asyncio
+async def test_on_operation_update_past_only_shows_empty():
+    """Al detener el último snapshot es todo-PAST → panel vacío (EmptyState)."""
+    panel = OperationsPanel()
+    event = OperationUpdateEvent(
+        operations=[
+            _op(state="PAST", order_id="OC-A"),
+            _op(state="PAST", order_id="OV-B"),
+        ],
+        timeframe_remaining=0.0,
+        timeframe_total=60.0,
+    )
+
+    await panel._on_operation_update(event)
+
+    assert panel._operations == []
+    assert panel._operations_column.controls == []
+    assert panel._empty_text.visible is True
+    assert panel._timer_text.value == ""

@@ -187,8 +187,13 @@ class OperationsPanel(ft.Container):
         event_bus.unsubscribe(OperationUpdateEvent, self._on_operation_update)
 
     async def _on_operation_update(self, event: OperationUpdateEvent) -> None:
-        """Actualiza el panel con el nuevo estado de operaciones."""
-        self._operations = event.operations
+        """Actualiza el panel con el nuevo estado de operaciones.
+
+        Filtra PAST: el panel muestra solo operaciones vigentes (ACTIVE +
+        PENDING). Las terminadas viven en DB (Órdenes/Auditoría) — el
+        snapshot completo sigue llegando para db_queue y audit.
+        """
+        self._operations = [op for op in event.operations if op.state != "PAST"]
         self._timeframe_remaining = event.timeframe_remaining
         self._timeframe_total = event.timeframe_total
         self._refresh_ui()
