@@ -637,6 +637,9 @@ class OperationParamsSection(ft.Container):
         self._amount_error = ft.Text(
             "", size=11, color=ft.Colors.RED_400, visible=False,
         )
+        self._balance_error = ft.Text(
+            "", size=11, color=ft.Colors.RED_400, visible=False,
+        )
         self._sl_error = ft.Text(
             "", size=11, color=ft.Colors.RED_400, visible=False,
         )
@@ -653,6 +656,7 @@ class OperationParamsSection(ft.Container):
                 ft.Text("📋 Parámetros", size=14, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                 ft.Row(controls=[self._amount_field, self._currency_dropdown], spacing=8),
                 self._amount_error,
+                self._balance_error,
                 self._symbol_picker,
                 ft.Row(controls=[self._sl_field, self._sl_type_dropdown], spacing=8),
                 self._sl_error,
@@ -748,6 +752,12 @@ class OperationParamsSection(ft.Container):
             control.value = message or ""
             control.visible = message is not None
             update_batcher.mark_dirty(control)
+
+    def set_balance_error(self, message: str | None) -> None:
+        """Error de fondos inline bajo el campo Monto (None = oculto)."""
+        self._balance_error.value = message or ""
+        self._balance_error.visible = message is not None
+        update_batcher.mark_dirty(self._balance_error)
 
     def sync_from_settings(self) -> None:
         """Re-sincroniza widgets desde el settings singleton."""

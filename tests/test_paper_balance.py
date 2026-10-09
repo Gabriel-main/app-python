@@ -37,6 +37,7 @@ def _settings_mock(trade_amount=50.0):
     m = patch("services.paper_balance.settings")
     mock = m.start()
     mock.TRADE_AMOUNT = trade_amount
+    mock.TRADE_CURRENCY = "USDT"
     return m
 
 
@@ -186,5 +187,24 @@ async def test_non_paper_mode_is_ignored():
         live.mode = "LIVE"
         await svc._on_order_executed(live)
         assert svc.get_balance() == PAPER_INITIAL_BALANCE
+    finally:
+        stop.stop()
+
+
+# ---------------------------------------------------------------------------
+# E4 — Guard: sin saldo para el capital la ENTRY no debita (nunca free < 0)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_entry_blocked_when_insufficient_free():
+    """20000 > 10000: la entrada no debita, no abre posición, free ≥ 0."""
+    stop = _settings_mock(trade_amount=20000.0)
+    try:
+        svc = _svc()
+        await svc._on_order_executed(
+            _make_event(side="BUY", purpose="ENTRY", operation_id="OC-G")
+        )
+        assert svc.get_balance() == PAPER_INITIAL_BALANCE
+        assert svc._locked == 0.0
+        assert "OC-G" not in svc._positions
     finally:
         stop.stop()

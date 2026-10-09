@@ -176,6 +176,61 @@ def validate_amount(
 
 
 # ---------------------------------------------------------------------------
+# Validación de fondos (SRP — pre-flight de saldo, consume BalanceUpdateEvent)
+# ---------------------------------------------------------------------------
+def validate_funds(
+    amount: float,
+    trading_type: str,
+    leverage: int,
+    free: float | None,
+    available: float | None,
+    mode: str,
+    asset: str = "USDT",
+) -> str | None:
+    """Valida que el usuario cubra la operación. Retorna mensaje o None.
+
+    Reglas (la misma que aplica Binance al colocar la orden):
+    - PAPER: debita el capital completo → `amount <= free`.
+    - LIVE FUTURES: cobra MARGEN = amount ÷ leverage →
+      `amount / leverage <= available` (availableBalance de la cuenta).
+    - LIVE SPOT/MARGIN: consume `free` → `amount <= free`.
+    - `free`/`available` en None = saldo aún desconocido → fail-open
+      (no bloquea; Binance sigue siendo la autoridad final).
+    - `amount <= 0` → None (ya lo cubre validate_amount, sin doble error).
+    """
+    if amount <= 0:
+        return None
+
+    if mode == "PAPER":
+        # paper_balance debita settings.TRADE_AMOUNT completo, sin leverage
+        if free is None:
+            return None
+        required, have, label = amount, free, "Saldo"
+    elif trading_type == "FUTURES":
+        if available is None:
+            return None
+        lev = max(leverage, 1)
+        required = amount / lev
+        have, label = available, "Margen"
+    else:  # LIVE SPOT / MARGIN
+        if free is None:
+            return None
+        required, have, label = amount, free, "Saldo"
+
+    if have >= required:
+        return None
+    if label == "Margen":
+        return (
+            f"Margen insuficiente: necesitas {required:,.2f} {asset} "
+            f"({amount:g} ÷ {lev}x) y tienes {have:,.2f} {asset}."
+        )
+    return (
+        f"Saldo insuficiente: necesitas {required:,.2f} {asset} "
+        f"y tienes {have:,.2f} {asset}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sizing — única fuente de verdad (DRY)
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)

@@ -796,14 +796,14 @@ class BinanceService:
         """Loop que consulta y publica saldo periódicamente."""
         try:
             # Primera consulta inmediata
-            balance = await self.get_balance()
+            balance = await self.get_balance(asset=settings.TRADE_CURRENCY)
             event_bus.publish(balance)
 
             while self._running:
                 await asyncio.sleep(self._balance_interval)
                 if not self._running:
                     break
-                balance = await self.get_balance()
+                balance = await self.get_balance(asset=settings.TRADE_CURRENCY)
                 event_bus.publish(balance)
         except asyncio.CancelledError:
             pass

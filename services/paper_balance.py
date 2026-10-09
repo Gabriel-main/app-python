@@ -109,9 +109,17 @@ class PaperBalanceService:
         """ENTRY (BUY o SELL): debitar capital, bloquearlo y trackear posición.
 
         Simétrico para largo y corto: abrir posición siempre consume margen,
-        sin importar el lado.
+        sin importar el lado. Sin saldo suficiente NO debita (nunca saldo
+        negativo): la pre-validación de fondos vive en validate_funds(),
+        esta guarda es la última línea de defensa.
         """
         capital = settings.TRADE_AMOUNT  # Capital invertido
+        if capital > self._free:
+            log.warning(
+                "PAPER ENTRY rechazada: capital %.2f > free %.2f — saldo sin cambios",
+                capital, self._free,
+            )
+            return
         self._free -= capital
         self._locked += capital
 
@@ -162,7 +170,7 @@ class PaperBalanceService:
 
     def _publish_balance(self) -> None:
         event_bus.publish(BalanceUpdateEvent(
-            asset="USDT",
+            asset=settings.TRADE_CURRENCY,
             trading_type=settings.TRADING_TYPE,
             free=round(self._free, 2),
             locked=round(self._locked, 2),

@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from core.events import (
+    BalanceUpdateEvent,
     InitialOrderEvent,
     OrderCanceledEvent,
     OrderExecutedEvent,
@@ -22,16 +23,17 @@ from services.trading_rules import QuantitySizer, SymbolFilters
 
 def _make_settings(
     order_type="LIMIT", limit_price=65000.0, mode="PAPER",
-    trade_amount=10.0,
+    trade_amount=10.0, trading_type="SPOT", leverage=1,
 ):
     m = MagicMock()
     m.ORDER_TYPE = order_type
     m.LIMIT_PRICE = limit_price
     m.TRADING_MODE = mode
     m.TRADING_SYMBOL = "BTCUSDT"
-    m.TRADING_TYPE = "SPOT"
-    m.LEVERAGE = 1
+    m.TRADING_TYPE = trading_type
+    m.LEVERAGE = leverage
     m.TRADE_AMOUNT = trade_amount
+    m.TRADE_CURRENCY = "USDT"
     m.STOP_LOSS = 1.01
     m.STOP_LOSS_TYPE = "PERCENT"
     m.TIMEFRAME = 1
@@ -756,6 +758,94 @@ async def test_start_trading_uses_floored_quantity():
         assert len(engine._operations) == 2
         # floor(1000 / 65192.32, 0.001) — no el float crudo
         assert engine._operations[0].quantity == 0.015
+        assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+# ---------------------------------------------------------------------------
+# F4b — Gate de fondos: el bot no arranca sin saldo/margen suficiente
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_trading_blocks_when_margin_insufficient():
+    """LIVE FUTURES: monto÷leverage > available → no arranca (regla Binance)."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    engine._last_balance = BalanceUpdateEvent(
+        asset="USDT", trading_type="FUTURES",
+        free=10000.0, available=3.0,
+    )
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0, mode="LIVE",
+                              trading_type="FUTURES", leverage=10)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is False
+        assert engine._operations == []
+        failed = _published(bus, OrderFailedEvent)
+        assert len(failed) == 1
+        assert failed[0].operation_id == "STARTUP"
+        assert "Margen insuficiente" in failed[0].error
+
+
+@pytest.mark.asyncio
+async def test_start_trading_blocks_when_paper_balance_insufficient():
+    """PAPER: free < monto → no arranca (paper debita capital completo)."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    engine._last_balance = BalanceUpdateEvent(
+        asset="USDT", trading_type="SPOT", free=45.0,
+    )
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is False
+        assert engine._operations == []
+        failed = _published(bus, OrderFailedEvent)
+        assert len(failed) == 1
+        assert failed[0].operation_id == "STARTUP"
+        assert "Saldo insuficiente" in failed[0].error
+
+
+@pytest.mark.asyncio
+async def test_start_trading_fails_open_without_balance_event():
+    """Sin evento de saldo aún → fail-open: sizing es la única puerta."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is True
+        assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_start_trading_runs_when_funds_sufficient():
+    """PAPER: free ≥ monto → el gate deja pasar (igualdad incluida)."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    engine._last_balance = BalanceUpdateEvent(
+        asset="USDT", trading_type="SPOT", free=1000.0,
+    )
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is True
         assert _published(bus, OrderFailedEvent) == []
         engine._stop_timeframe_timer()
 

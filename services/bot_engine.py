@@ -28,6 +28,7 @@ from typing import Callable, Deque, Literal
 
 from core.event_bus import event_bus
 from core.events import (
+    BalanceUpdateEvent,
     BotSignalEvent,
     BotStateChangedEvent,
     InitialOrderEvent,
@@ -57,7 +58,7 @@ from services.order_executor import (
     is_limit_crossed,
 )
 from services.pnl_calculator import PnLCalculator
-from services.trading_rules import QuantitySizer
+from services.trading_rules import QuantitySizer, validate_funds
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +202,10 @@ class BotEngine:
         # Tracking de tareas de stop loss (para cleanup al detener)
         self._sl_tasks: set[asyncio.Task] = set()
 
+        # Último saldo conocido (BalanceUpdateEvent) — gate de fondos.
+        # None = aún sin evento → fail-open en validate_funds().
+        self._last_balance: BalanceUpdateEvent | None = None
+
     # ------------------------------------------------------------------
     # Consulta de estado
     # ------------------------------------------------------------------
@@ -232,6 +237,7 @@ class BotEngine:
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.subscribe(OrderFillEvent, self._on_order_fill)
         event_bus.subscribe(OrderFailedEvent, self._on_order_failed)
+        event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
 
         # Publicar estado inicial después de que la UI se suscriba
         asyncio.create_task(self._publish_initial_state(), name="initial_state")
@@ -263,6 +269,7 @@ class BotEngine:
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.unsubscribe(OrderFillEvent, self._on_order_fill)
+        event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
         if self._executor is not None:
             await self._executor.close()
         log.info("BotEngine stopped")
@@ -331,6 +338,10 @@ class BotEngine:
 
         self._active = event.is_running
         log.info("BotEngine active: %s | mode: %s", self._active, event.mode)
+
+    async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
+        """Guarda el saldo más reciente para el gate de fondos (push, sin polling)."""
+        self._last_balance = event
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         """Recarga parámetros de estrategia, recrea executor si cambió el modo,
@@ -556,6 +567,30 @@ class BotEngine:
                 mode=settings.TRADING_MODE,
             ))
             return False
+
+        # F4b: gate de fondos — mismo validate_funds que la UI (DRY).
+        # Sin evento de saldo aún (_last_balance None) → fail-open:
+        # la UI ya bloquea y Binance sigue siendo la autoridad final.
+        bal = self._last_balance
+        funds_err = validate_funds(
+            settings.TRADE_AMOUNT,
+            settings.TRADING_TYPE,
+            settings.LEVERAGE,
+            free=bal.free if bal is not None else None,
+            available=bal.available if bal is not None else None,
+            mode=settings.TRADING_MODE,
+            asset=settings.TRADE_CURRENCY,
+        )
+        if funds_err:
+            log.error("Cannot cover entry: %s", funds_err)
+            event_bus.publish(OrderFailedEvent(
+                operation_id="STARTUP",
+                side="BUY",
+                error=funds_err,
+                mode=settings.TRADING_MODE,
+            ))
+            return False
+
         quantity = sized.quantity
         self._reset_heal_state()
 

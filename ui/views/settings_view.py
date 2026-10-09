@@ -16,10 +16,10 @@ import flet as ft
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import BotStateChangedEvent, NavigateToEvent, PriceTickEvent, SettingsUpdatedEvent
+from core.events import BalanceUpdateEvent, BotStateChangedEvent, NavigateToEvent, PriceTickEvent, SettingsUpdatedEvent
 from core.update_batcher import update_batcher
 from services.settings_persistence import EnvSettingsPersistence
-from services.trading_rules import QuantitySizer, effective_min_notional
+from services.trading_rules import QuantitySizer, effective_min_notional, validate_funds
 from ui.components.settings_sections import (
     ConfirmDialogHelper,
     OperationParamsSection,
@@ -64,6 +64,9 @@ class SettingsView(ft.Column):
         # Último precio de mercado conocido — única referencia alimentada por
         # PriceTickEvent, la usan la validación de LIMIT_PRICE y la de monto
         self._market_price_ref: float = 0.0
+        # Último saldo conocido — BalanceUpdateEvent. None = desconocido →
+        # validate_funds fail-open hasta que llegue el primer evento.
+        self._balance_ref: BalanceUpdateEvent | None = None
 
         # DIP: el mismo QuantitySizer que usa BotEngine — misma size_entry()
         # para validar el monto aquí y para operar allá (DRY, cero duplicación)
@@ -139,6 +142,7 @@ class SettingsView(ft.Column):
         self._update_save_button_state()
         event_bus.subscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.subscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.subscribe(BalanceUpdateEvent, self._on_balance_update)
         # Consultar leverage máximo de Binance para el símbolo actual
         asyncio.create_task(self._refresh_max_leverage())
         # Precio de referencia (LIMIT_PRICE) y filtros del exchange (monto)
@@ -148,6 +152,7 @@ class SettingsView(ft.Column):
     def will_unmount(self) -> None:
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
+        event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
 
     async def _on_price_tick(self, event: PriceTickEvent) -> None:
         """Mantiene fresco el precio de referencia (sin polling)."""
@@ -157,6 +162,18 @@ class SettingsView(ft.Column):
         self._market_price_ref = event.price
         # Solo revalidar si alguna regla cambió de resultado: evita marcar
         # el botón como dirty en cada tick del WebSocket.
+        if self._validation_signature() != before:
+            self._update_save_button_state()
+
+    async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
+        """Mantiene fresco el saldo de referencia (push, sin polling)."""
+        if event.asset != settings.TRADE_CURRENCY:
+            return
+        if event.trading_type != settings.TRADING_TYPE:
+            return
+        before = self._validation_signature()
+        self._balance_ref = event
+        # Solo revalidar si cambió la validez (mismo patrón que el tick)
         if self._validation_signature() != before:
             self._update_save_button_state()
 
@@ -198,10 +215,13 @@ class SettingsView(ft.Column):
         self._params_section.set_disabled(disabled)
         limit_msg = self._limit_price_error_msg()
         self._type_section.set_limit_price_error(limit_msg)
+        balance_msg = self._balance_error_msg()
+        self._params_section.set_balance_error(balance_msg)
         self._save_btn.disabled = (
             disabled
             or not self._has_changes()
             or limit_msg is not None
+            or balance_msg is not None
             or any(self._form_errors())
         )
         update_batcher.mark_dirty(self._save_btn)
@@ -232,10 +252,13 @@ class SettingsView(ft.Column):
         )
         limit_msg = self._limit_price_error_msg()
         self._type_section.set_limit_price_error(limit_msg)
+        balance_msg = self._balance_error_msg()
+        self._params_section.set_balance_error(balance_msg)
         errors = self._form_errors()
         self._params_section.set_validation_errors(*errors)
         self._save_btn.disabled = (
-            not has_changes or not symbol_valid or limit_msg is not None or any(errors)
+            not has_changes or not symbol_valid or limit_msg is not None
+            or balance_msg is not None or any(errors)
         )
         update_batcher.mark_dirty(self._save_btn)
 
@@ -269,9 +292,27 @@ class SettingsView(ft.Column):
             return base
         return self._sizer.size(amount, self._market_price_ref, trading_type).error
 
-    def _validation_signature(self) -> tuple[str | None, str | None]:
-        """Par (precio límite, monto) — detecta cambios de validez por tick."""
-        return (self._limit_price_error_msg(), self._amount_error_msg())
+    def _validation_signature(self) -> tuple[str | None, str | None, str | None]:
+        """Par de validez (precio límite, monto, fondos) — detecta cambios por evento."""
+        return (
+            self._limit_price_error_msg(),
+            self._amount_error_msg(),
+            self._balance_error_msg(),
+        )
+
+    def _balance_error_msg(self) -> str | None:
+        """Error de fondos: saldo vs monto, con la regla de Binance
+        (FUTURES valida margen = monto ÷ leverage vs availableBalance)."""
+        bal = self._balance_ref
+        return validate_funds(
+            self._params_section.get_amount(),
+            self._type_section.get_trading_type(),
+            self._type_section.get_leverage(),
+            free=bal.free if bal is not None else None,
+            available=bal.available if bal is not None else None,
+            mode=self._mode_section.get_mode(),
+            asset=settings.TRADE_CURRENCY,
+        )
 
     def _form_errors(self) -> tuple[str | None, str | None, str | None]:
         """Errores de validación: (monto, stop loss, temporalidad)."""
@@ -397,6 +438,10 @@ class SettingsView(ft.Column):
         limit_msg = self._limit_price_error_msg()
         if limit_msg is not None:
             self._type_section.set_limit_price_error(limit_msg)
+            return
+        balance_msg = self._balance_error_msg()
+        if balance_msg is not None:
+            self._params_section.set_balance_error(balance_msg)
             return
         errors = self._form_errors()
         if any(errors):

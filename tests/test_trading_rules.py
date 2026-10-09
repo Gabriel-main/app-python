@@ -16,6 +16,7 @@ from services.trading_rules import (
     min_operable_quantity,
     size_entry,
     validate_amount,
+    validate_funds,
 )
 
 # Payloads reales de exchangeInfo (verificados en vivo contra Binance)
@@ -299,3 +300,39 @@ async def test_sizer_provider_failure_fails_open():
     await sizer.refresh("BTCUSDT", "FUTURES")
     assert sizer.filters.min_qty == 0.0
     assert sizer.size(50.0, 65192.32, "FUTURES").ok
+
+
+# ---------------------------------------------------------------------------
+# validate_funds — regla de Binance por tipo/modo (compartida UI + motor)
+# ---------------------------------------------------------------------------
+def test_validate_funds_paper_checks_full_amount():
+    # PAPER debita capital completo: amount vs free
+    assert validate_funds(100.0, "FUTURES", 10, 45.0, None, "PAPER") is not None
+    assert validate_funds(100.0, "FUTURES", 10, 100.0, None, "PAPER") is None  # igualdad
+
+
+def test_validate_funds_live_spot_checks_free():
+    assert validate_funds(100.0, "SPOT", 1, 45.0, None, "LIVE", "USDC") is not None
+    assert validate_funds(100.0, "SPOT", 1, 450.0, None, "LIVE", "USDC") is None
+
+
+def test_validate_funds_live_futures_checks_margin():
+    # margen = amount ÷ leverage vs available (regla Binance)
+    err = validate_funds(100.0, "FUTURES", 10, 5000.0, 9.99, "LIVE")
+    assert err is not None and "Margen insuficiente" in err
+    assert validate_funds(100.0, "FUTURES", 10, 5000.0, 10.0, "LIVE") is None
+
+
+def test_validate_funds_futures_leverage_zero_uses_one():
+    # leverage 0 no divide por cero: cuenta como 1x
+    err = validate_funds(100.0, "FUTURES", 0, None, 50.0, "LIVE")
+    assert err is not None and "100.00" in err
+
+
+def test_validate_funds_unknown_balance_fails_open():
+    assert validate_funds(100.0, "FUTURES", 10, None, None, "LIVE") is None
+    assert validate_funds(100.0, "SPOT", 1, None, None, "LIVE", "USDC") is None
+
+
+def test_validate_funds_non_positive_amount_defers_to_amount_rule():
+    assert validate_funds(0.0, "FUTURES", 10, 0.0, 0.0, "LIVE") is None
