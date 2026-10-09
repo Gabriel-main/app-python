@@ -19,7 +19,7 @@ from core.event_bus import event_bus
 from core.events import BotStateChangedEvent, NavigateToEvent, PriceTickEvent, SettingsUpdatedEvent
 from core.update_batcher import update_batcher
 from services.settings_persistence import EnvSettingsPersistence
-from services.trading_rules import QuantitySizer
+from services.trading_rules import QuantitySizer, effective_min_notional
 from ui.components.settings_sections import (
     ConfirmDialogHelper,
     OperationParamsSection,
@@ -250,12 +250,21 @@ class SettingsView(ft.Column):
     def _amount_error_msg(self) -> str | None:
         """Error del monto: reglas base + sizing contra los filtros reales.
 
-        Sin precio de referencia todavía solo aplican las reglas base
-        (graceful degradation, igual que la validación de precio límite).
+        El mínimo notional es POR SÍMBOLO (BTC≈50, SOL≈6, XRP≈5): se resuelve
+        con effective_min_notional() — fallback al global 50 solo si los
+        filtros del símbolo son desconocidos. Sin precio de referencia solo
+        aplica esta regla de notional (graceful degradation); el cálculo por
+        cantidad/minQty queda para cuando llega el tick.
         """
         amount = self._params_section.get_amount()
         trading_type = self._type_section.get_trading_type()
-        base = validate_amount(amount, trading_type)
+        base = validate_amount(
+            amount,
+            trading_type,
+            min_notional=effective_min_notional(
+                self._sizer.filters, trading_type,
+            ),
+        )
         if base is not None or self._market_price_ref <= 0:
             return base
         return self._sizer.size(amount, self._market_price_ref, trading_type).error

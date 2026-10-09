@@ -18,10 +18,12 @@ nunca de `binance_service`.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
-# Fallback cuando exchangeInfo no está disponible (Spot USDⓈ-M / error -4164)
+# Fallback cuando exchangeInfo no está disponible (Spot USDⓈ-M / error -4164).
+# NO es el mínimo universal de Futures: el real es por símbolo (BTC≈50, SOL≈6)
+# y vive en SymbolFilters.min_notional. Ver effective_min_notional().
 MIN_FUTURES_NOTIONAL: float = 50.0
 
 _EPS = 1e-9
@@ -44,6 +46,11 @@ class SymbolFilters:
     def unknown(cls, symbol: str = "") -> SymbolFilters:
         """Filtros sin información (fail-open: no bloquea el sizing)."""
         return cls(symbol=symbol)
+
+    @property
+    def is_unknown(self) -> bool:
+        """True si no se resolvió exchangeInfo (todos los límites en cero)."""
+        return self.min_qty <= 0 and self.step_size <= 0 and self.min_notional <= 0
 
     @classmethod
     def from_exchange_info(cls, info: dict, symbol: str) -> SymbolFilters | None:
@@ -123,6 +130,27 @@ def min_operable_quantity(price: float, filters: SymbolFilters) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Mínimo notional aplicable (fuente única del "¿qué mínimo uso?" — DRY)
+# ---------------------------------------------------------------------------
+def effective_min_notional(filters: SymbolFilters, trading_type: str) -> float:
+    """Mínimo notional aplicable para `filters` en `trading_type`.
+
+    - Filtros conocidos → regla real del símbolo (0 = el exchange no impone
+      mínimo; es válido, no se sustituye).
+    - Filtros desconocidos + FUTURES → MIN_FUTURES_NOTIONAL (fallback
+      conservador: sin exchangeInfo mejor no operar por debajo del global).
+    - Filtros desconocidos + SPOT/MARGIN → 0 (no existe mínimo global;
+      fail-open, la regla por símbolo vive en los filtros cuando llegan).
+
+    Único punto de decisión: lo consumen la validación sin precio
+    (validate_amount) y el sizing con precio (size_entry).
+    """
+    if not filters.is_unknown:
+        return filters.min_notional
+    return MIN_FUTURES_NOTIONAL if trading_type == "FUTURES" else 0.0
+
+
+# ---------------------------------------------------------------------------
 # Validación del formulario (SRP — se re-exporta desde ui.settings_sections)
 # ---------------------------------------------------------------------------
 def validate_amount(
@@ -130,7 +158,13 @@ def validate_amount(
     trading_type: str,
     min_notional: float = MIN_FUTURES_NOTIONAL,
 ) -> str | None:
-    """Valida el monto de operación. Retorna mensaje de error o None."""
+    """Valida el monto SIN precio de mercado. Retorna mensaje o None.
+
+    `min_notional` debe ser el mínimo real del símbolo cuando el caller lo
+    conoce — resolverlo con `effective_min_notional(filters, trading_type)`.
+    El default es el fallback global (solo correcto si los filtros del
+    símbolo son desconocidos).
+    """
     if amount <= 0:
         return "El monto debe ser mayor a 0."
     if trading_type == "FUTURES" and amount < min_notional:
@@ -167,14 +201,21 @@ def size_entry(
 
     Reglas, en orden:
       1. sin precio o monto <= 0              → error
-      2. qty = floor(amount / price, step)
-      3. qty < mín. operable (min_qty / min_notional) → error con números
-      4. filtros desconocidos (ceros)         → fail-open, no bloquea
+      2. resolver notional aplicable          → fallback si filtros desconocidos
+      3. qty = floor(amount / price, step)
+      4. qty < mín. operable (min_qty / min_notional) → error con números
+      5. filtros desconocidos en SPOT         → fail-open, no bloquea
     """
     if price <= 0:
         return SizedQuantity(0.0, 0.0, "Sin precio de mercado para dimensionar la orden.")
     if trade_amount <= 0:
         return SizedQuantity(0.0, 0.0, "El monto debe ser mayor a 0.")
+
+    # Fallback: filtros desconocidos en Futures exigen el mínimo global.
+    # (SPOT desconocido → 0, conserva el fail-open documentado.)
+    effective = effective_min_notional(filters, trading_type)
+    if effective != filters.min_notional:
+        filters = replace(filters, min_notional=effective)
 
     raw = trade_amount / price
     quantity = floor_to_step(raw, filters.step_size)

@@ -11,6 +11,7 @@ from services.trading_rules import (
     QuantitySizer,
     SizedQuantity,
     SymbolFilters,
+    effective_min_notional,
     floor_to_step,
     min_operable_quantity,
     size_entry,
@@ -170,6 +171,63 @@ def test_size_entry_spot_min_notional_five():
 
 
 # ---------------------------------------------------------------------------
+# effective_min_notional — mínimo real por símbolo vs fallback global
+# ---------------------------------------------------------------------------
+def test_effective_min_notional_known_symbol_uses_real_rule():
+    # SOLUSDC: la regla real (6) manda, NO el global de 50
+    sol = SymbolFilters(symbol="SOLUSDC", step_size=0.01, min_notional=6.0)
+    assert effective_min_notional(sol, "FUTURES") == 6.0
+
+
+def test_effective_min_notional_known_without_rule_is_zero():
+    # Filtros parseados pero sin filtro NOTIONAL: no se inventa regla
+    f = SymbolFilters(symbol="X", min_qty=1.0, step_size=1.0)
+    assert effective_min_notional(f, "FUTURES") == 0.0
+
+
+def test_effective_min_notional_unknown_futures_falls_back_to_global():
+    assert effective_min_notional(SymbolFilters.unknown(), "FUTURES") == MIN_FUTURES_NOTIONAL
+
+
+def test_effective_min_notional_unknown_spot_is_zero():
+    # Spot no tiene mínimo global: fail-open
+    assert effective_min_notional(SymbolFilters.unknown(), "SPOT") == 0.0
+
+
+def test_is_unknown_property():
+    assert SymbolFilters.unknown("SOLUSDC").is_unknown is True
+    assert _FUT.is_unknown is False
+    assert SymbolFilters(symbol="X", min_qty=1.0).is_unknown is False
+
+
+# ---------------------------------------------------------------------------
+# size_entry con fallback (filtros desconocidos + Futures → mínimo global)
+# ---------------------------------------------------------------------------
+def test_size_entry_unknown_futures_below_global_fallback_is_blocked():
+    result = size_entry(6.0, 12.0, SymbolFilters.unknown("SOLUSDC"), "FUTURES")
+    assert result.error is not None
+    assert "50.00" in result.error  # mínimo global a precio actual
+
+
+def test_size_entry_unknown_futures_at_global_fallback_passes():
+    result = size_entry(50.0, 12.0, SymbolFilters.unknown(), "FUTURES")
+    assert result.ok  # 50 ≥ 50: fail-open preservado para ≥ fallback
+
+
+def test_size_entry_unknown_spot_stays_fail_open():
+    result = size_entry(6.0, 12.0, SymbolFilters.unknown(), "SPOT")
+    assert result.ok
+
+
+def test_size_entry_known_symbol_uses_symbol_notional_not_global():
+    # Regresión SOLUSDC $6: con filtros reales (6) el monto SÍ es operable
+    sol = SymbolFilters(symbol="SOLUSDC", step_size=0.01, min_notional=6.0)
+    result = size_entry(6.0, 12.0, sol, "FUTURES")
+    assert result.ok
+    assert result.quantity == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
 # validate_amount (migrado desde settings_sections — un solo literal)
 # ---------------------------------------------------------------------------
 def test_validate_amount():
@@ -188,6 +246,15 @@ def test_validate_amount_custom_min_notional():
     assert validate_amount(49.0, "FUTURES", min_notional=50.0) is not None
     assert validate_amount(51.0, "FUTURES", min_notional=50.0) is None
     assert validate_amount(4.0, "SPOT") is None
+
+
+def test_validate_amount_with_symbol_notional_not_global():
+    # Regresión SOLUSDC $6: mínimo real (6) en vez del global de 50
+    assert validate_amount(6.0, "FUTURES", min_notional=6.0) is None
+    err = validate_amount(5.0, "FUTURES", min_notional=6.0)
+    assert err is not None and "6" in err
+    # El default sigue siendo el fallback conservador (contrato intacto)
+    assert validate_amount(6.0, "FUTURES") is not None
 
 
 # ---------------------------------------------------------------------------
