@@ -61,13 +61,6 @@ class SettingsView(ft.Column):
         # --- Indicador de validación ---
         self._validation_indicator = SymbolValidationIndicator()
 
-        # --- Error de precio límite (LIMIT exige > 0 y cercanía al mercado) ---
-        self._limit_price_error = ft.Text(
-            "",
-            size=11,
-            color=ft.Colors.RED_400,
-            visible=False,
-        )
         # Último precio de mercado conocido — única referencia alimentada por
         # PriceTickEvent, la usan la validación de LIMIT_PRICE y la de monto
         self._market_price_ref: float = 0.0
@@ -114,11 +107,6 @@ class SettingsView(ft.Column):
             self._params_section,
             ft.Container(
                 content=self._validation_indicator,
-                width=380,
-                padding=ft.Padding.only(left=4, bottom=4),
-            ),
-            ft.Container(
-                content=self._limit_price_error,
                 width=380,
                 padding=ft.Padding.only(left=4, bottom=4),
             ),
@@ -209,8 +197,7 @@ class SettingsView(ft.Column):
         self._type_section.set_disabled(disabled)
         self._params_section.set_disabled(disabled)
         limit_msg = self._limit_price_error_msg()
-        self._limit_price_error.value = limit_msg or ""
-        self._limit_price_error.visible = limit_msg is not None
+        self._type_section.set_limit_price_error(limit_msg)
         self._save_btn.disabled = (
             disabled
             or not self._has_changes()
@@ -218,7 +205,6 @@ class SettingsView(ft.Column):
             or any(self._form_errors())
         )
         update_batcher.mark_dirty(self._save_btn)
-        update_batcher.mark_dirty(self._limit_price_error)
 
     # ------------------------------------------------------------------
     # Detección de cambios
@@ -245,15 +231,13 @@ class SettingsView(ft.Column):
             self._validation_indicator._icon.color == ft.Colors.GREEN_400
         )
         limit_msg = self._limit_price_error_msg()
-        self._limit_price_error.value = limit_msg or ""
-        self._limit_price_error.visible = limit_msg is not None
+        self._type_section.set_limit_price_error(limit_msg)
         errors = self._form_errors()
         self._params_section.set_validation_errors(*errors)
         self._save_btn.disabled = (
             not has_changes or not symbol_valid or limit_msg is not None or any(errors)
         )
         update_batcher.mark_dirty(self._save_btn)
-        update_batcher.mark_dirty(self._limit_price_error)
 
     def _limit_price_error_msg(self) -> str | None:
         """Mensaje de error del precio límite, o None si es válido."""
@@ -403,9 +387,7 @@ class SettingsView(ft.Column):
             return
         limit_msg = self._limit_price_error_msg()
         if limit_msg is not None:
-            self._limit_price_error.value = limit_msg
-            self._limit_price_error.visible = True
-            update_batcher.mark_dirty(self._limit_price_error)
+            self._type_section.set_limit_price_error(limit_msg)
             return
         errors = self._form_errors()
         if any(errors):

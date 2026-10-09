@@ -353,6 +353,57 @@ def test_limit_price_hint_follows_restore():
 
 
 # ---------------------------------------------------------------------------
+# Error inline de precio límite (debajo del campo, patrón de _amount_error)
+# ---------------------------------------------------------------------------
+def test_set_limit_price_error_toggles():
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "LIMIT"
+        mock_settings.LIMIT_PRICE = 65000.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+
+    section.set_limit_price_error("msg error")
+    assert section._limit_price_error.visible is True
+    assert section._limit_price_error.value == "msg error"
+
+    section.set_limit_price_error(None)
+    assert section._limit_price_error.visible is False
+    assert section._limit_price_error.value == ""
+
+
+def test_limit_price_error_positioned_below_field():
+    """El error queda inmediatamente después del campo y antes del hint."""
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "LIMIT"
+        mock_settings.LIMIT_PRICE = 65000.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+
+    controls = section.content.controls
+    field_idx = controls.index(section._limit_price_field)
+    assert controls[field_idx + 1] is section._limit_price_error
+    assert controls[field_idx + 2] is section._limit_price_hint
+
+
+def test_limit_price_error_hidden_when_switching_to_market():
+    """Si el campo se oculta (MARKET), su error inline también."""
+    with patch("ui.components.settings_sections.settings") as mock_settings:
+        mock_settings.ORDER_TYPE = "LIMIT"
+        mock_settings.LIMIT_PRICE = 65000.0
+        mock_settings.TRADING_TYPE = "SPOT"
+        mock_settings.LEVERAGE = 1
+        section = TradingTypeSection()
+
+    section.set_limit_price_error("msg error")
+    event = MagicMock(control=MagicMock(value="MARKET"))
+    section._on_order_type_changed(event)
+    assert section._limit_price_error.visible is False
+    assert section._limit_price_error.value == ""
+
+
+# ---------------------------------------------------------------------------
 # Validaciones de datos (monto + stop loss + temporalidad) — Opción B
 # ---------------------------------------------------------------------------
 def test_validate_amount():
@@ -422,8 +473,10 @@ def test_validate_limit_price_too_far_returns_message():
     ref = 84996.0
     err = validate_limit_price(100.0, ref, "LIMIT")
     assert err is not None
-    assert "100.0000" in err
-    assert "84,996.0000" in err
+    # Mensaje simple: precio actual + ejemplo de rango válido (ref ±5%)
+    assert "Demasiado lejos del precio actual ($84,996.00)" in err
+    assert "$80,746.20" in err
+    assert "$89,245.80" in err
     assert f"{LIMIT_PRICE_MAX_DEVIATION_PCT:g}%" in err
     # Límite superior también inválido (SELL a 1000 cuando el mercado está en 85k)
     assert validate_limit_price(1000.0, ref, "LIMIT") is not None

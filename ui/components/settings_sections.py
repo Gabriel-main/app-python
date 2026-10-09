@@ -406,6 +406,10 @@ class TradingTypeSection(ft.Container):
             on_change=self._notify_change,
         )
 
+        self._limit_price_error = ft.Text(
+            "", size=11, color=ft.Colors.RED_400, visible=False,
+        )
+
         self._limit_price_hint = ft.Text(
             "Entrada a precio fijo: solo se ejecuta si el mercado llega a este "
             "precio; si no, queda pendiente hasta cancelar el bot o cambiar ajustes.",
@@ -427,6 +431,7 @@ class TradingTypeSection(ft.Container):
                 self._max_lev_label,
                 self._order_type_dropdown,
                 self._limit_price_field,
+                self._limit_price_error,
                 self._limit_price_hint,
                 ft.Text("Futures/Margin permiten leverage y posiciones long/short.", size=11, color=ft.Colors.BLUE_GREY_400),
             ],
@@ -445,6 +450,9 @@ class TradingTypeSection(ft.Container):
         is_limit = e.control.value == "LIMIT"
         self._limit_price_field.visible = is_limit
         self._limit_price_hint.visible = is_limit
+        if not is_limit:
+            # El campo desaparece: su error inline tampoco debe quedar visible
+            self.set_limit_price_error(None)
         update_batcher.mark_dirty(self._limit_price_field)
         update_batcher.mark_dirty(self._limit_price_hint)
         self._notify_change()
@@ -498,6 +506,12 @@ class TradingTypeSection(ft.Container):
         except (TypeError, ValueError):
             return 0.0
 
+    def set_limit_price_error(self, message: str | None) -> None:
+        """Muestra/oculta el error inline bajo el campo (None = oculto)."""
+        self._limit_price_error.value = message or ""
+        self._limit_price_error.visible = message is not None
+        update_batcher.mark_dirty(self._limit_price_error)
+
     def restore(self, form_snapshot: dict) -> None:
         self._trading_type_dropdown.value = form_snapshot["trading_type"]
         self._leverage_dropdown.value = str(form_snapshot["leverage"])
@@ -508,6 +522,8 @@ class TradingTypeSection(ft.Container):
         is_limit = form_snapshot["order_type"] == "LIMIT"
         self._limit_price_field.visible = is_limit
         self._limit_price_hint.visible = is_limit
+        if not is_limit:
+            self.set_limit_price_error(None)
 
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""
@@ -790,10 +806,12 @@ def validate_limit_price(
         return None
     deviation = abs(limit_price - reference_price) / reference_price * 100.0
     if deviation > LIMIT_PRICE_MAX_DEVIATION_PCT:
+        half = LIMIT_PRICE_MAX_DEVIATION_PCT / 100.0
         return (
-            f"El precio límite (${limit_price:,.4f}) está a {deviation:.1f}% del "
-            f"mercado (${reference_price:,.4f}). Debe estar dentro de "
-            f"{LIMIT_PRICE_MAX_DEVIATION_PCT:g}% para que la orden pueda llenarse."
+            f"Demasiado lejos del precio actual (${reference_price:,.2f}). "
+            f"Usa un precio entre ${reference_price * (1 - half):,.2f} y "
+            f"${reference_price * (1 + half):,.2f} "
+            f"(máx. {LIMIT_PRICE_MAX_DEVIATION_PCT:g}%)."
         )
     return None
 
