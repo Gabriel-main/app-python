@@ -195,15 +195,27 @@ class PaperExecutor(OrderExecutor):
 class LiveExecutor(OrderExecutor):
     """Ejecuta órdenes reales en Binance."""
 
+    # Mensaje accionable cuando Binance rechaza el cambio Hedge → One-Way.
+    _HEDGE_BLOCKED_MSG = (
+        "Tu cuenta está en modo Hedge y Binance no deja cambiarla "
+        "(hay posiciones u órdenes abiertas). Cambia a One-Way en "
+        "la app de Binance (Futures → Posiciones → One-Way) o "
+        "cierra las posiciones y reinicia el bot."
+    )
+
     def __init__(self) -> None:
         self._client = None
         self._leverage_set: bool = False
+        self._position_mode_set: bool = False
 
     async def execute(self, request: OrderRequest) -> OrderPlacement:
         from services.binance_client import create_client, execute_order
 
         if not self._client:
             self._client = await create_client()
+
+        if settings.TRADING_TYPE == "FUTURES" and not self._position_mode_set:
+            await self._ensure_position_mode()
 
         if settings.TRADING_TYPE in ("FUTURES", "MARGIN") and not self._leverage_set:
             await self._set_leverage()
@@ -281,6 +293,46 @@ class LiveExecutor(OrderExecutor):
             "Leverage set to %dx for %s",
             settings.LEVERAGE, settings.TRADING_TYPE,
         )
+
+    async def _ensure_position_mode(self) -> None:
+        """Garantiza One-Way en Futures (la estrategia dual OC/OV netea).
+
+        El modo Hedge obliga a enviar positionSide en cada orden (-4061) y
+        cambiaría la semántica (SELL abriría SHORT en vez de cerrar el
+        largo). Si la cuenta está en Hedge se intenta el cambio automático;
+        si Binance lo rechaza (posiciones/órdenes abiertas) se lanza un
+        error accionable — el caller publica OrderFailedEvent y el toast
+        explica qué hacer.
+        """
+        from binance.exceptions import BinanceAPIException
+
+        if not self._is_hedge_mode(await self._fetch_position_mode()):
+            self._position_mode_set = True
+            log.info("Position mode already One-Way")
+            return
+        try:
+            await self._client.futures_change_position_mode(
+                dualSidePosition="false",
+            )
+        except BinanceAPIException as exc:
+            if exc.code != -4059:  # -4059 "No need to change": carrera, ya One-Way
+                raise RuntimeError(self._HEDGE_BLOCKED_MSG) from exc
+        self._position_mode_set = True
+        log.warning("Position mode changed: Hedge → One-Way (required by bot)")
+
+    async def _fetch_position_mode(self) -> dict:
+        """Consulta el modo de posición — PUNTO ÚNICO de acceso a este endpoint.
+
+        python-binance 1.0.37: el método es `futures_get_position_mode`
+        (NO `futures_position_side_dual`, nombre de docs más nuevas; usarlo
+        lanzaba AttributeError en la primera orden — regresión T6.1).
+        """
+        return await self._client.futures_get_position_mode()
+
+    @staticmethod
+    def _is_hedge_mode(dual: dict) -> bool:
+        """Normaliza dualSidePosition: Binance responde 'true'/'false' (str) o bool."""
+        return str(dual.get("dualSidePosition", "false")).lower() == "true"
 
     def invalidate_leverage(self) -> None:
         """Marca que el leverage debe re-aplicarse en Binance."""

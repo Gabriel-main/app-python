@@ -51,7 +51,7 @@ class NotificationToast(ft.Container):
             "",
             size=11,
             color=ft.Colors.GREY_400,
-            max_lines=1,
+            max_lines=2,
             overflow=ft.TextOverflow.ELLIPSIS,
         )
 
@@ -105,7 +105,9 @@ class NotificationToast(ft.Container):
         self._show(
             success=False,
             title=f"Error en {side_label}",
-            detail=event.error[:80],
+            # 160 chars + 2 líneas: el detalle accionable (monto mínimo,
+            # saldo, etc.) vive al final del mensaje — no se corta a 80.
+            detail=event.error[:160],
         )
 
     # ------------------------------------------------------------------

@@ -303,6 +303,29 @@ async def test_sizer_provider_failure_fails_open():
 
 
 # ---------------------------------------------------------------------------
+# ensure_loaded — segunda oportunidad si el fetch inicial falló (fail-open)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ensure_loaded_refreshes_only_when_unknown():
+    provider = _StubProvider(_FUT)
+    sizer = QuantitySizer(provider)
+    # unknown → refresca una vez
+    await sizer.ensure_loaded("BTCUSDT", "FUTURES")
+    assert provider.calls == 1
+    assert not sizer.filters.is_unknown
+    # ya cargados → no vuelve a llamar al provider
+    await sizer.ensure_loaded("BTCUSDT", "FUTURES")
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_without_provider_is_noop():
+    sizer = QuantitySizer()
+    result = await sizer.ensure_loaded("BTCUSDT", "FUTURES")
+    assert result.is_unknown  # compat: no lanza, no bloquea
+
+
+# ---------------------------------------------------------------------------
 # validate_funds — regla de Binance por tipo/modo (compartida UI + motor)
 # ---------------------------------------------------------------------------
 def test_validate_funds_paper_checks_full_amount():

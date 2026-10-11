@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 
 from core.events import (
     BalanceUpdateEvent,
+    BotStateChangedEvent,
     InitialOrderEvent,
     OrderCanceledEvent,
     OrderExecutedEvent,
@@ -24,12 +25,13 @@ from services.trading_rules import QuantitySizer, SymbolFilters
 def _make_settings(
     order_type="LIMIT", limit_price=65000.0, mode="PAPER",
     trade_amount=10.0, trading_type="SPOT", leverage=1,
+    symbol="BTCUSDT",
 ):
     m = MagicMock()
     m.ORDER_TYPE = order_type
     m.LIMIT_PRICE = limit_price
     m.TRADING_MODE = mode
-    m.TRADING_SYMBOL = "BTCUSDT"
+    m.TRADING_SYMBOL = symbol
     m.TRADING_TYPE = trading_type
     m.LEVERAGE = leverage
     m.TRADE_AMOUNT = trade_amount
@@ -98,6 +100,27 @@ async def _sizer_with(filters: SymbolFilters) -> QuantitySizer:
 _FUT_FILTERS = SymbolFilters(
     symbol="BTCUSDT", min_qty=0.001, step_size=0.001,
     min_notional=50.0, tick_size=0.10,
+)
+
+# SOLUSDT FUTURES reales (verificados en vivo): minNotional 5, NO el global 50.
+# Regresión del reporte en vivo: 6.5 USDT @ 110.07 → qty 0.05, notional 5.50
+# era rechazado con "mínimo 0.454256" (50/110.07) porque el motor no cargaba
+# los filtros del símbolo.
+_SOL_FUT_FILTERS = SymbolFilters(
+    symbol="SOLUSDT", min_qty=0.01, step_size=0.01,
+    min_notional=5.0, tick_size=0.01,
+)
+
+# ETHUSDT FUTURES reales: minNotional 20 (también < 50 → afectado por el bug)
+_ETH_FUT_FILTERS = SymbolFilters(
+    symbol="ETHUSDT", min_qty=0.001, step_size=0.001,
+    min_notional=20.0, tick_size=0.01,
+)
+
+# XRPUSDT FUTURES reales: minNotional 5
+_XRP_FUT_FILTERS = SymbolFilters(
+    symbol="XRPUSDT", min_qty=0.1, step_size=0.1,
+    min_notional=5.0, tick_size=0.0001,
 )
 
 
@@ -847,6 +870,154 @@ async def test_start_trading_runs_when_funds_sufficient():
 
         assert started is True
         assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+# ---------------------------------------------------------------------------
+# Regresión en vivo (SOL 6.5 USDT @ 110.07): filtros reales por símbolo
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_trading_sol_amount_below_global_50_still_runs():
+    """SOLUSDT 6.5 USDT: minNotional real 5 (no el global 50) → arranca."""
+    engine = _engine(await _sizer_with(_SOL_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=6.5, symbol="SOLUSDT",
+                              trading_type="FUTURES", leverage=10)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 110.07
+
+        started = await engine._start_trading()
+
+        assert started is True, _published(bus, OrderFailedEvent)
+        assert _published(bus, OrderFailedEvent) == []
+        # qty floored a step 0.01: floor(6.5/110.07, 0.01) = 0.05
+        assert engine._operations[0].quantity == 0.05
+        engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_start_trading_eth_amount_between_20_and_50_runs():
+    """ETHUSDT 30 USDT: minNotional real 20 (< 50) → arranca."""
+    engine = _engine(await _sizer_with(_ETH_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=30.0, symbol="ETHUSDT",
+                              trading_type="FUTURES", leverage=10)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 2500.0
+
+        started = await engine._start_trading()
+
+        assert started is True, _published(bus, OrderFailedEvent)
+        assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_start_trading_xrp_amount_below_50_runs():
+    """XRPUSDT 10 USDT: minNotional real 5 (< 50) → arranca."""
+    engine = _engine(await _sizer_with(_XRP_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=10.0, symbol="XRPUSDT",
+                              trading_type="FUTURES", leverage=10)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 0.52
+
+        started = await engine._start_trading()
+
+        assert started is True, _published(bus, OrderFailedEvent)
+        assert _published(bus, OrderFailedEvent) == []
+        engine._stop_timeframe_timer()
+
+
+# ---------------------------------------------------------------------------
+# ensure_loaded: segunda oportunidad si el fetch inicial falló (fail-open)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_start_trading_retries_unknown_filters_via_provider():
+    """Sizer sin refrescar (filtros unknown) + provider → ensure_loaded
+    carga los filtros reales antes de dimensionar (no rechaza con el
+    mínimo global de 50)."""
+    engine = _engine(QuantitySizer(_StubFiltersProvider(_SOL_FUT_FILTERS)))
+    assert engine._sizer.filters.is_unknown  # sin refresh previo
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=6.5, symbol="SOLUSDT",
+                              trading_type="FUTURES", leverage=10)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 110.07
+
+        started = await engine._start_trading()
+
+        assert started is True, _published(bus, OrderFailedEvent)
+        assert not engine._sizer.filters.is_unknown
+        engine._stop_timeframe_timer()
+
+
+@pytest.mark.asyncio
+async def test_start_trading_unknown_filters_without_provider_still_fail_open():
+    """Sin provider y filtros unknown → no rechaza el arranque (compat)."""
+    engine = _engine(QuantitySizer())
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        started = await engine._start_trading()
+
+        assert started is True
+        engine._stop_timeframe_timer()
+
+
+# ---------------------------------------------------------------------------
+# Estado real tras arranque rechazado: la UI no debe quedar "BOT ACTIVO"
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_failed_start_publishes_bot_state_correction():
+    """Si _start_trading rechaza, se publica is_running=False para que
+    toggle y BotStatusBar reviertan (regresión: 'BOT ACTIVO' fantasma)."""
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=50.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32  # 50/65192 → 0.0007 < minQty 0.001
+
+        await engine._on_bot_state_changed(
+            BotStateChangedEvent(is_running=True, mode="PAPER"),
+        )
+
+        assert engine._active is False
+        corrections = [
+            e for e in _published(bus, BotStateChangedEvent)
+            if e.is_running is False
+        ]
+        assert corrections, "debe publicar la corrección is_running=False"
+        assert len(_published(bus, OrderFailedEvent)) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_start_publishes_no_correction():
+    engine = _engine(await _sizer_with(_FUT_FILTERS))
+    with patch("services.bot_engine.settings",
+               _make_settings(trade_amount=1000.0)), \
+         patch("services.bot_engine.event_bus") as bus, \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65192.32
+
+        await engine._on_bot_state_changed(
+            BotStateChangedEvent(is_running=True, mode="PAPER"),
+        )
+
+        assert engine._active is True
+        corrections = [
+            e for e in _published(bus, BotStateChangedEvent)
+            if e.is_running is False
+        ]
+        assert corrections == []
         engine._stop_timeframe_timer()
 
 

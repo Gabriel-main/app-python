@@ -58,6 +58,7 @@ from services.order_executor import (
     is_limit_crossed,
 )
 from services.pnl_calculator import PnLCalculator
+from services.symbol_repository import EventBusSymbolRepository
 from services.trading_rules import QuantitySizer, validate_funds
 
 log = logging.getLogger(__name__)
@@ -330,6 +331,13 @@ class BotEngine:
             # Iniciar trading — solo activar si realmente arrancó
             started = await self._start_trading()
             self._active = started
+            if not started:
+                # El arranque fue rechazado (sizing/sin precio/sin fondos):
+                # publicar el estado REAL para que toggle y barra reviertan
+                # a PAUSADO (si no, la UI queda mintiendo con "BOT ACTIVO").
+                event_bus.publish(BotStateChangedEvent(
+                    is_running=False, mode=settings.TRADING_MODE,
+                ))
             log.info("BotEngine active: %s | mode: %s", self._active, event.mode)
             return
         elif not event.is_running and self._active:
@@ -557,6 +565,11 @@ class BotEngine:
 
         # F4: única puerta de validación de sizing — si la cantidad no es
         # operable el bot no arranca (el toast explica cuánto falta).
+        # ensure_loaded: si el fetch inicial falló (fail-open), reintenta
+        # aquí en vez de rechazar con el mínimo global de Futures.
+        await self._sizer.ensure_loaded(
+            settings.TRADING_SYMBOL, settings.TRADING_TYPE,
+        )
         sized = self._sizer.size(settings.TRADE_AMOUNT, pa, settings.TRADING_TYPE)
         if not sized.ok:
             log.error("Cannot size entry: %s", sized.error)
@@ -1377,5 +1390,9 @@ class BotEngine:
         ))
 
 
-# Instancia global singleton
-bot_engine = BotEngine()
+# Instancia global singleton — el sizer RECIBE el provider real: sin filtros
+# del exchange, el mínimo global de Futures (50) rechazaba montos válidos
+# (SOL/XRP/DOGE… minNotional 5-20). Regresión: 6.5 USDT en SOLUSDT.
+bot_engine = BotEngine(
+    sizer=QuantitySizer(EventBusSymbolRepository()),
+)

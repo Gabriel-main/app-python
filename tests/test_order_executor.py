@@ -2,7 +2,7 @@
 Tests para OrderExecutor — execute(OrderRequest) MARKET/LIMIT (Fase 1).
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from services.order_executor import (
     OrderPlacement,
@@ -153,3 +153,120 @@ def test_extract_fill_price_market_fills():
     req = OrderRequest(symbol="BTCUSDT", side="BUY", quantity=1.0, order_type="MARKET", entry_price=64000.0)
     resp = {"fills": [{"price": "65123.4"}]}
     assert LiveExecutor._extract_fill_price(resp, req) == 65123.4
+
+
+# ---------------------------------------------------------------------------
+# LiveExecutor._ensure_position_mode — Hedge → One-Way (regresión -4061)
+# ---------------------------------------------------------------------------
+def _api_error(code: int, msg: str):
+    from binance.exceptions import BinanceAPIException
+
+    class _FakeResponse:
+        pass
+
+    return BinanceAPIException(
+        _FakeResponse(), 400, f'{{"code": {code}, "msg": "{msg}"}}',
+    )
+
+
+def _mock_futures_client(dual: str = "false") -> AsyncMock:
+    """Cliente Futures mockeado (DRY): posición + leverage en un solo lugar."""
+    client = AsyncMock()
+    client.futures_get_position_mode = AsyncMock(
+        return_value={"dualSidePosition": dual},
+    )
+    client.futures_change_position_mode = AsyncMock()
+    client.futures_change_leverage = AsyncMock()
+    return client
+
+
+def _executor_with_client(dual: str):
+    from services.order_executor import LiveExecutor
+
+    ex = LiveExecutor()
+    ex._client = _mock_futures_client(dual)
+    return ex
+
+
+def test_is_hedge_mode_normalizes_bool_and_str():
+    """dualSidePosition llega como 'true'/'false' (str) o bool según versión."""
+    from services.order_executor import LiveExecutor
+
+    assert LiveExecutor._is_hedge_mode({"dualSidePosition": "true"}) is True
+    assert LiveExecutor._is_hedge_mode({"dualSidePosition": True}) is True
+    assert LiveExecutor._is_hedge_mode({"dualSidePosition": "false"}) is False
+    assert LiveExecutor._is_hedge_mode({}) is False
+
+
+@pytest.mark.asyncio
+async def test_position_mode_oneway_is_noop():
+    ex = _executor_with_client("false")
+    await ex._ensure_position_mode()
+    ex._client.futures_change_position_mode.assert_not_awaited()
+    assert ex._position_mode_set is True
+
+
+@pytest.mark.asyncio
+async def test_position_mode_hedge_is_switched():
+    """Regresión en vivo: cuenta en Hedge → el bot la pone en One-Way."""
+    ex = _executor_with_client("true")
+    await ex._ensure_position_mode()
+    ex._client.futures_change_position_mode.assert_awaited_once_with(
+        dualSidePosition="false",
+    )
+    assert ex._position_mode_set is True
+
+
+@pytest.mark.asyncio
+async def test_position_mode_hedge_with_open_positions_blocks():
+    """-4060 (posiciones abiertas): error accionable, bandera sin poner."""
+    ex = _executor_with_client("true")
+    ex._client.futures_change_position_mode = AsyncMock(
+        side_effect=_api_error(-4060, "Position side not valid."),
+    )
+    with pytest.raises(RuntimeError, match="One-Way"):
+        await ex._ensure_position_mode()
+    assert ex._position_mode_set is False
+
+
+@pytest.mark.asyncio
+async def test_position_mode_race_4059_is_success():
+    """-4059 'No need to change': carrera — ya era One-Way."""
+    ex = _executor_with_client("true")
+    ex._client.futures_change_position_mode = AsyncMock(
+        side_effect=_api_error(-4059, "No need to change position side."),
+    )
+    await ex._ensure_position_mode()
+    assert ex._position_mode_set is True
+
+
+@pytest.mark.asyncio
+async def test_execute_ensures_position_mode_before_leverage():
+    """El modo de posición se resuelve ANTES de la primera orden/leverage."""
+    from services.order_executor import LiveExecutor
+
+    ex = LiveExecutor()
+    mock_client = _mock_futures_client("false")
+    order_resp = {
+        "status": "FILLED", "avgPrice": "110.0",
+        "executedQty": "0.05", "cummulativeQuoteQty": "5.5",
+    }
+    req = OrderRequest(
+        symbol="SOLUSDT", side="BUY", quantity=0.05,
+        order_type="MARKET", client_order_id="LIVE-PM01",
+        entry_price=110.0,
+    )
+    with patch("services.binance_client.create_client",
+               AsyncMock(return_value=mock_client)), \
+         patch("services.binance_client.execute_order",
+               AsyncMock(return_value=order_resp)), \
+         patch("services.order_executor.settings") as s:
+        s.TRADING_TYPE = "FUTURES"
+        s.TRADING_SYMBOL = "SOLUSDT"
+        s.LEVERAGE = 10
+        placement = await ex.execute(req)
+
+    mock_client.futures_get_position_mode.assert_awaited_once()
+    mock_client.futures_change_leverage.assert_awaited_once()
+    assert placement.status == "FILLED"
+    assert placement.fill_price == 110.0

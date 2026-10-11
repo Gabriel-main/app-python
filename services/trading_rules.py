@@ -325,6 +325,16 @@ class QuantitySizer:
         self._filters = filters
         return self._filters
 
+    async def ensure_loaded(self, symbol: str, trading_type: str) -> SymbolFilters:
+        """Refresca solo si los filtros siguen desconocidos (segunda oportunidad).
+
+        Cubre el caso en que el fetch inicial falló por red (fail-open): al
+        arrancar el bot se reintenta en vez de rechazar con el mínimo global.
+        """
+        if self._provider is not None and self._filters.is_unknown:
+            return await self.refresh(symbol, trading_type)
+        return self._filters
+
     @property
     def filters(self) -> SymbolFilters:
         return self._filters

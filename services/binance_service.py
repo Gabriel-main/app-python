@@ -731,6 +731,16 @@ class BinanceService:
                 balances = await client.futures_account_balance()
                 entry = next((b for b in balances if b["asset"] == asset), None)
                 if entry:
+                    # Log crudo para diagnosticar incoherencias wallet vs
+                    # disponible (T5: wallet 0.00 + disponible 13.62 reportado)
+                    log.debug(
+                        "Futures balance raw [%s]: %s",
+                        asset,
+                        {k: entry.get(k) for k in (
+                            "balance", "crossWalletBalance", "availableBalance",
+                            "crossUnPnl", "maxWithdrawAmount",
+                        )},
+                    )
                     event.free = float(entry.get("balance", 0))
                     event.available = float(entry.get("availableBalance", 0))
                     event.unrealized_pnl = float(entry.get("crossUnPnl", 0))
