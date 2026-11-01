@@ -81,6 +81,9 @@ class OrderFailedEvent:
     side: Literal["BUY", "SELL"]
     error: str
     mode: Literal["PAPER", "LIVE"] = "PAPER"
+    # ENTRY/EXIT: el auto-sanado del motor solo aplica a fallos de ENTRY
+    # (los EXIT ya tienen su propio retry con cooldown en SL/timeframe).
+    purpose: Literal["ENTRY", "EXIT"] = "ENTRY"
     timestamp: float = field(default_factory=time.time)
 
 

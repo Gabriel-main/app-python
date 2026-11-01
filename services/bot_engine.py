@@ -5,9 +5,10 @@ Responsabilidades:
 - Al iniciar: crear OC(a) Compra Activa + OV(p) Venta Pendiente SIN orden —
   el arranque no coloca ENTRY (cero órdenes hasta el primer ciclo)
 - Calcular SL como distancia fija (porcentaje o USDT) del precio de apertura
-- Timer de temporalidad: cada T se evalúan operaciones, se despacha la ENTRY
-  de la ACTIVE si aún no se colocó (único punto de entrada de órdenes ENTRY),
-  se limpian pasadas, se crea nueva pendiente
+- Timer de temporalidad: cada T se evalúan operaciones, se CIERRA la
+  posición de la ACTIVE si está fillada (EXIT → promoción → nueva ENTRY,
+  el ciclo avanza sin depender de tocar el SL), se limpian pasadas, se crea
+  nueva pendiente y se re-pricea una ENTRY LIMIT stale
 - EXIT siempre inmediato: SL y cierre en stop nunca se difieren
 - Trailing stop: SL se mueve con el precio (pero nunca hacia atrás)
 - Publicar OperationUpdateEvent en cada cambio de estado
@@ -23,7 +24,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Deque, Literal
 
 from core.event_bus import event_bus
@@ -80,6 +81,7 @@ class WorkingOrder:
     limit_price: float
     mode: str                          # "PAPER" | "LIVE"
     success_event_factory: Callable | None = None
+    placed_at: float = field(default_factory=time.time)  # age → re-price
 
 
 class TradingOperation:
@@ -116,6 +118,10 @@ class TradingOperation:
         # False mientras la orden de entrada siga working (sin posición:
         # SL/PnL no aplican hasta el fill)
         self.entry_filled = entry_filled
+        # Cierre EXIT: evita tareas duplicadas y throttlea los reintentos
+        # (SL fallido / cierre por timeframe fallido → no spamear órdenes)
+        self.exit_in_flight = False
+        self.exit_retry_at = 0.0
 
     def transition_to(self, new_state: str) -> bool:
         """Transición de estado validada. Retorna False si es inválida."""
@@ -162,6 +168,10 @@ class BotEngine:
     # evita spamear toasts al usuario.
     _HEAL_COOLDOWN_S: float = 5.0
     _MAX_HEAL_ATTEMPTS: int = 5
+
+    # Throttle de reintentos de EXIT (SL o cierre por timeframe fallido):
+    # sin esto, un EXIT rechazado se relanza en cada tick de precio.
+    _EXIT_RETRY_COOLDOWN_S: float = 2.0
 
     def __init__(
         self,
@@ -270,6 +280,7 @@ class BotEngine:
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.unsubscribe(OrderFillEvent, self._on_order_fill)
+        event_bus.unsubscribe(OrderFailedEvent, self._on_order_failed)
         event_bus.unsubscribe(BalanceUpdateEvent, self._on_balance_update)
         if self._executor is not None:
             await self._executor.close()
@@ -422,7 +433,13 @@ class BotEngine:
         Reutiliza `_heal_orphan_entry()` (DRY) en vez de duplicar la lógica de
         recolocación. El bucle fail→heal→fail se rompe con cooldown + tope de
         intentos: al agotarlos se emite UN `log.error` y se deja de reintentar.
+
+        Solo sanan fallos de ENTRY: los EXIT ya tienen su propio retry con
+        cooldown (SL por tick / cierre por timeframe), y mezclar contadores
+        agotaba el tope de heal con fallos de cierre.
         """
+        if event.purpose != "ENTRY":
+            return  # fallo de EXIT: retry propio, sin consumir intentos de heal
         if not self._active:
             return  # bot pausado: al arrancar `_start_trading` despacha fresco
         if event.operation_id == "STARTUP":
@@ -808,14 +825,18 @@ class BotEngine:
     async def _on_timeframe_tick(self) -> None:
         """Se ejecuta cuando expira la temporalidad.
 
-        Flujo según diagrama:
-        1. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
-        2. Retirar operaciones PAST y TODAS las PENDING
-        3. Crear NUEVA operación PENDING con datos actualizados
-        4. Colocar la ENTRY de la ACTIVE si aún no se colocó/filló (repair)
+        Flujo:
+        1. Actualizar SL de ACTIVE (trailing stop por timeframe)
+        2. CERRAR la posición de la ACTIVE si está fillada (EXIT → promoción)
+           — el ciclo avanza cada ventana sin depender de tocar el SL
+        3. Retirar PAST y reciclar PENDING (si el cierre avanzó)
+        4. Re-price de ENTRY LIMIT working que lleva una ventana sin fill
+           y con el precio fuera de alcance del límite
+        5. Crear NUEVA PENDING complementa de la ACTIVE vigente
+        6. Repair idempotente de ENTRY (única colocación restante)
 
-        La ENTRY inicial va al arranque (Q1) y la promovida tras un SL es
-        inmediata (Q2): este paso 4 solo cubre el repair de una entrada
+        La ENTRY inicial va al arranque (Q1) y la promovida tras un cierre
+        es inmediata (Q2): este paso 6 solo cubre el repair de una entrada
         que quedó sin orden (idempotente — no duplica working).
         """
         if not self._operations:
@@ -828,12 +849,9 @@ class BotEngine:
         log.info("Timeframe tick | Pa=%.4f | Operations: %d", pa, len(self._operations))
 
         # 1. Encontrar la operación ACTIVE
-        active_op = None
-        for op in self._operations:
-            if op.state == "ACTIVE":
-                active_op = op
-                break
-
+        active_op = next(
+            (op for op in self._operations if op.state == "ACTIVE"), None,
+        )
         if active_op is None:
             log.warning("No ACTIVE operation found during timeframe tick")
             return
@@ -843,42 +861,118 @@ class BotEngine:
         if quantity <= 0:
             quantity = active_op.quantity
 
-        # 2. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
+        # 1. Actualizar SL de ACTIVE si condición se cumplió (trailing stop)
         self._update_sl_on_tick(active_op, pa, sl_dist)
 
-        # 3. Retirar operaciones terminadas (PAST) y TODAS las PENDING
-        #    (y cancelar sus órdenes LIMIT working asociadas)
-        discarded_ids = {
-            op.order_id for op in self._operations if op.state == "PENDING"
-        }
-        self._retain_live()
-        if discarded_ids:
-            await self._cancel_working_orders(
-                lambda w: w.operation.order_id in discarded_ids,
-                "timeframe_expired",
+        # 2. Cierre por expiración de timeframe (solo si hay posición abierta)
+        close_ok = True
+        if active_op.entry_filled:
+            close_ok = await self._close_on_timeframe(
+                active_op, pa, sl_dist, quantity,
             )
 
-        # 4. Crear NUEVA operación PENDING con datos actualizados
-        new_pending_side = "SELL" if active_op.side == "BUY" else "BUY"
-        new_pending = self._create_operation(new_pending_side, "PENDING", pa, sl_dist, quantity)
-        self._operations.append(new_pending)
+        # 3. Retirar operaciones terminadas (PAST). Las PENDING se reciclan
+        #    solo si el cierre avanzó: si el EXIT falló, la PENDING se
+        #    conserva para la promoción del próximo tick (no se pierde el
+        #    par OC/OV) y no se crea otra duplicada.
+        self._operations = [
+            op for op in self._operations if op.state != "PAST"
+        ]
+        if close_ok:
+            discarded_ids = {
+                op.order_id for op in self._operations if op.state == "PENDING"
+            }
+            self._operations = [
+                op for op in self._operations if op.state != "PENDING"
+            ]
+            if discarded_ids:
+                await self._cancel_working_orders(
+                    lambda w: w.operation.order_id in discarded_ids,
+                    "timeframe_expired",
+                )
+
+        # 4. Re-price de ENTRY LIMIT stale (una ventana sin fill y el precio
+        #    quedó fuera de alcance del límite)
+        await self._reprice_stale_entries(pa, sl_dist)
+
+        # 5. Crear NUEVA operación PENDING complementa de la ACTIVE vigente
+        #    (puede ser la recién promovida tras el cierre). Si el cierre
+        #    falló se conservó la PENDING: no se duplica el par OC/OV.
+        current_active = next(
+            (op for op in self._operations if op.state == "ACTIVE"), None,
+        )
+        if current_active is None:
+            log.warning("No ACTIVE operation after close — skipping cycle update")
+            return
+
+        new_pending = next(
+            (op for op in self._operations if op.state == "PENDING"), None,
+        )
+        if new_pending is None:
+            new_pending_side = "SELL" if current_active.side == "BUY" else "BUY"
+            new_pending = self._create_operation(new_pending_side, "PENDING", pa, sl_dist, quantity)
+            self._operations.append(new_pending)
 
         log.info("Timeframe update: ACTIVE=%s, NEW PENDING=%s",
-                 active_op.order_id, new_pending.order_id)
+                 current_active.order_id, new_pending.order_id)
 
-        # 4. Repair de ENTRY: si la ACTIVE quedó sin orden (falla/heal),
+        # 6. Repair de ENTRY: si la ACTIVE quedó sin orden (falla/heal),
         #    el fin de ciclo la recoloca (idempotente — no duplica).
         for op in self._operations:
             await self._place_entry(op)
 
         event_bus.publish(TimeframeCycleEvent(
             pa=pa,
-            active_side=active_op.side,
+            active_side=current_active.side,
             new_pending_side=new_pending.side,
             operations_count=len(self._operations),
         ))
 
         self._publish_update()
+
+    async def _reprice_stale_entries(self, pa: float, sl_dist: float) -> None:
+        """Watchdog de ENTRY LIMIT (event-driven, en el fin de ciclo).
+
+        Si la ENTRY working de la ACTIVE ya vivió una ventana completa sin
+        fill y el precio quedó fuera de alcance del límite, se cancela y se
+        recoloca al precio actual (marketable → fill inmediato). Sin esto,
+        en LIVE una LIMIT lejana deja al bot muerto: sin fill no hay SL y
+        sin SL no hay promoción.
+        """
+        if self._timeframe_duration <= 0:
+            return  # sin timer real (llamada directa en tests): no re-pricear
+        now = time.time()
+        for op in list(self._operations):
+            if op.state != "ACTIVE" or op.entry_filled:
+                continue
+            stale = next(
+                (
+                    w for w in self._working_orders.values()
+                    if w.operation is op
+                    and (now - w.placed_at) >= self._timeframe_duration
+                ),
+                None,
+            )
+            if stale is None:
+                continue
+            if not self._limit_unreachable(stale, pa, sl_dist):
+                continue  # el límite sigue al alcance: esperar el cruce
+            log.info(
+                "ENTRY LIMIT stale: %s (%s @ %.4f) — re-pricing @ %.4f",
+                stale.order_id, stale.side, stale.limit_price, pa,
+            )
+            await self._cancel_working_orders(
+                lambda w, target=op: w.operation is target,
+                "entry_reprice",
+            )
+            await self._place_entry(op, limit_override=pa)
+
+    @staticmethod
+    def _limit_unreachable(w: WorkingOrder, pa: float, sl_dist: float) -> bool:
+        """True si el precio se fue más allá del límite (no podrá cruzarlo)."""
+        if w.side == "BUY":
+            return pa > w.limit_price + sl_dist
+        return pa < w.limit_price - sl_dist
 
     def _update_sl_on_tick(self, op: TradingOperation, pa: float, sl_dist: float) -> None:
         """Actualiza el SL de la operación ACTIVE según condiciones del diagrama.
@@ -933,6 +1027,9 @@ class BotEngine:
             if not op.entry_filled:
                 # Sin fill de entrada no hay posición: el SL no aplica aún
                 continue
+            if op.exit_in_flight or time.time() < op.exit_retry_at:
+                # Ya hay un EXIT en vuelo o en cooldown: sin duplicados
+                continue
 
             triggered = False
             if op.side == "BUY" and price <= op.stop_loss:
@@ -952,37 +1049,167 @@ class BotEngine:
 
     async def _execute_stop_loss(self, op: TradingOperation, trigger_price: float) -> None:
         """Ejecuta la orden de stop loss (EXIT → siempre MARKET) y promueve."""
-        order_event = await self._dispatch_order(
-            op, trigger_price,
-            success_event_factory=lambda e: StopLossEvent(
-                order_id=e.order_id,
-                side=op.side,
-                quantity=op.quantity,
-                price=trigger_price,
-                mode=settings.TRADING_MODE,
-            ),
-            purpose="EXIT",
-        )
-        if order_event is None:
-            return
+        if op.exit_in_flight or time.time() < op.exit_retry_at:
+            return  # ya hay un EXIT en vuelo o en cooldown (sin duplicados)
+        op.exit_in_flight = True
+        op.exit_retry_at = time.time() + self._EXIT_RETRY_COOLDOWN_S
+        try:
+            order_event = await self._dispatch_order(
+                op, trigger_price,
+                success_event_factory=lambda e: StopLossEvent(
+                    order_id=e.order_id,
+                    side=op.side,
+                    quantity=op.quantity,
+                    price=trigger_price,
+                    mode=settings.TRADING_MODE,
+                ),
+                purpose="EXIT",
+            )
+            if order_event is None:
+                return  # fallo: el cooldown reintenta en el próximo tick
 
-        # Race guard: el usuario detuvo el bot mientras el EXIT estaba en
-        # vuelo → no promover ni colocar entrada de la PENDING.
-        if not self._active:
-            log.info("Bot stopped during SL execution — skipping promotion")
-            return
+            # Race guard: el usuario detuvo el bot mientras el EXIT estaba en
+            # vuelo → no promover ni colocar entrada de la PENDING.
+            if not self._active:
+                log.info("Bot stopped during SL execution — skipping promotion")
+                return
 
+            await self._after_close(op)
+            log.info("SL executed, operation marked PAST: %s", op.order_id)
+        finally:
+            op.exit_in_flight = False
+
+    async def _close_on_timeframe(
+        self,
+        op: TradingOperation,
+        pa: float,
+        sl_dist: float,
+        quantity: float,
+    ) -> bool:
+        """Cierre por expiración de timeframe (EXIT → siempre MARKET).
+
+        Garantiza el avance del ciclo: sin esto la operación solo se
+        cerraría al tocar el SL — que persigue al precio (`_update_sl_on_tick`)
+        y puede no tocar nunca — y el bot dejaría de operar tras la primera
+        entrada (el síntoma reportado en FUTURES y SPOT).
+
+        Retorna True si la operación se cerró (ya con promoción hecha);
+        False si falló o hay un EXIT en vuelo/cooldown (se reintenta en el
+        próximo tick, conservando la PENDING para la promoción).
+        """
+        if op.exit_in_flight or time.time() < op.exit_retry_at:
+            return False
+        op.exit_in_flight = True
+        op.exit_retry_at = time.time() + self._EXIT_RETRY_COOLDOWN_S
+        try:
+            order_event = await self._dispatch_order(op, pa, purpose="EXIT")
+            if order_event is None:
+                log.warning(
+                    "Timeframe close failed for %s — retrying next tick",
+                    op.order_id,
+                )
+                return False
+            if not self._active:
+                log.info("Bot stopped during timeframe close — skipping promotion")
+                return False
+            await self._after_close(op)
+            log.info("Timeframe close: %s marked PAST", op.order_id)
+            return True
+        finally:
+            op.exit_in_flight = False
+
+    async def _after_close(self, closed: TradingOperation) -> None:
+        """Post-cierre compartido (SL y timeframe): PAST + promoción/ciclo."""
         # State Pattern: transición validada ACTIVE → PAST
-        op.mark_as_past()
+        closed.mark_as_past()
+
+        pa = self._current_price
+        sl_dist = self._calculate_sl_distance(pa)
+        quantity = self._calculate_quantity(pa) or closed.quantity
 
         # Q2: promover PENDING → ACTIVE y colocar su ENTRY de inmediato
         # ("dentro del tiempo" — paso 2 del diagrama).
-        promoted = self._promote_pending_to_active()
-        if promoted is not None:
-            await self._place_entry(promoted)
+        await self._promote_or_cycle(closed, pa, sl_dist, quantity)
         self._publish_update()
 
-        log.info("SL executed, operation marked PAST: %s", op.order_id)
+    async def _promote_or_cycle(
+        self,
+        closed: TradingOperation,
+        pa: float,
+        sl_dist: float,
+        quantity: float,
+    ) -> TradingOperation | None:
+        """Promueve la PENDING tras un cierre; si no hay PENDING viable,
+        crea la siguiente ACTIVE para que el ciclo nunca se quede sin ella.
+
+        SPOT sin saldo del activo base para vender: en vez de dejar una
+        ACTIVE muerta (sin fill → sin SL → sin promoción → bot congelado),
+        se cicla una nueva operación del MISMO lado que la cerrada
+        (fallback long-only hasta que haya saldo para vender).
+        """
+        candidate = next(
+            (op for op in self._operations if op.state == "PENDING"), None,
+        )
+        if candidate is not None:
+            err = await self._check_entry_allowed(
+                candidate.side, candidate.quantity,
+            )
+            if err is None:
+                promoted = self._promote_pending_to_active()
+                if promoted is not None:
+                    log.info("PENDING promoted to ACTIVE: %s", promoted.order_id)
+                    await self._place_entry(promoted)
+                    return promoted
+            else:
+                log.warning(
+                    "PENDING %s not promoted: %s", candidate.order_id, err,
+                )
+
+        # Sin PENDING viable: siguiente ACTIVE del ciclo (complemento del
+        # cerrado; en SPOT sin saldo para vender se mantiene el mismo lado)
+        side: Literal["BUY", "SELL"] = (
+            "SELL" if closed.side == "BUY" else "BUY"
+        )
+        if side == "SELL":
+            err = await self._check_entry_allowed(side, quantity)
+            if err is not None:
+                log.warning(
+                    "SPOT SELL not affordable (%s) — cycling %s instead",
+                    err, closed.side,
+                )
+                side = closed.side  # fallback long-only
+        new_op = self._create_operation(side, "ACTIVE", pa, sl_dist, quantity)
+        self._operations.append(new_op)
+        log.info("New ACTIVE after close: %s (%s)", new_op.order_id, side)
+        await self._place_entry(new_op)
+        return new_op
+
+    async def _check_entry_allowed(self, side: str, quantity: float) -> str | None:
+        """Gate de ENTRY: retorna mensaje de error o None si está permitida.
+
+        Solo restringe ENTRY SELL en SPOT LIVE: vender exige poseer el
+        activo base (en Spot no hay short). Si el saldo no se puede
+        consultar (red/keys) → fail-open: Binance es la autoridad final.
+        """
+        if side != "SELL":
+            return None
+        if settings.TRADING_TYPE != "SPOT" or settings.TRADING_MODE != "LIVE":
+            return None
+        from services.binance_client import get_asset_free
+        from services.trading_rules import base_asset
+
+        asset = base_asset(settings.TRADING_SYMBOL, settings.TRADE_CURRENCY)
+        if not asset:
+            return None  # símbolo no interpretado → fail-open
+        free = await get_asset_free(asset)
+        if free is None:
+            return None  # saldo desconocido → fail-open
+        if free >= quantity:
+            return None
+        return (
+            f"Sin saldo de {asset} para vender: necesitas "
+            f"{quantity:.8f} y tienes {free:.8f}."
+        )
 
     def _promote_pending_to_active(self) -> TradingOperation | None:
         """Promueve la primera PENDING a ACTIVE (State Pattern).
@@ -1005,21 +1232,28 @@ class BotEngine:
         price: float,
         purpose: str,
         market_price: float,
+        limit_price_override: float = 0.0,
     ) -> OrderRequest:
         """Único punto de decisión MARKET vs LIMIT (DRY).
 
         ENTRY usa settings.ORDER_TYPE (LIMIT solo si LIMIT_PRICE > 0).
         EXIT (stop loss / cierre manual) es siempre MARKET por urgencia.
+        `limit_price_override` permite el re-price de una ENTRY LIMIT stale
+        al precio actual sin perder la configuración del usuario.
         """
         order_type = "MARKET"
         limit_price = 0.0
         if (
             purpose == "ENTRY"
             and settings.ORDER_TYPE == "LIMIT"
-            and settings.LIMIT_PRICE > 0
+            and (settings.LIMIT_PRICE > 0 or limit_price_override > 0)
         ):
             order_type = "LIMIT"
-            limit_price = settings.LIMIT_PRICE
+            limit_price = (
+                limit_price_override
+                if limit_price_override > 0
+                else settings.LIMIT_PRICE
+            )
 
         # 2a: la orden de cierre usa el lado OPUESTO al de la operación
         # (cerrar un BUY = SELL; cerrar un SELL = BUY). Evita duplicar
@@ -1075,6 +1309,7 @@ class BotEngine:
         price: float = 0.0,
         success_event_factory=None,
         purpose: str = "EXIT",
+        limit_price_override: float = 0.0,
     ) -> OrderExecutedEvent | None:
         """Template Method: ejecuta → registra/publica → persiste → maneja errores.
 
@@ -1088,6 +1323,8 @@ class BotEngine:
                                    y retorna un evento extra (StopLossEvent, etc.).
                                    Para LIMIT working se difiere hasta el fill.
             purpose: "ENTRY" (aplica ORDER_TYPE) | "EXIT" (siempre MARKET).
+            limit_price_override: precio límite forzado (re-price de ENTRY
+                                  stale); 0 = usar settings.LIMIT_PRICE.
 
         Returns:
             OrderExecutedEvent si quedó FILLED, None si falló o si quedó
@@ -1103,10 +1340,13 @@ class BotEngine:
                 side=op.side,
                 error="Executor not initialized",
                 mode=settings.TRADING_MODE,
+                purpose=purpose,
             ))
             return None
 
-        request = self._build_order_request(op, price, purpose, self._current_price)
+        request = self._build_order_request(
+            op, price, purpose, self._current_price, limit_price_override,
+        )
         try:
             placement = await self._executor.execute(request)
         except Exception as exc:
@@ -1116,6 +1356,7 @@ class BotEngine:
                 side=op.side,
                 error=str(exc),
                 mode=settings.TRADING_MODE,
+                purpose=purpose,
             ))
             return None
 
@@ -1337,19 +1578,35 @@ class BotEngine:
         # Ya tiene orden working (fill pendiente): no duplicar
         return not any(w.operation is op for w in self._working_orders.values())
 
-    async def _place_entry(self, op: TradingOperation) -> bool:
+    async def _place_entry(
+        self, op: TradingOperation, limit_override: float = 0.0,
+    ) -> bool:
         """Único punto de colocación de ENTRY (DRY).
 
         Idempotente: si la op no necesita entrada (state/fill/working), no
         hace nada. El orden de call sites: arranque (Q1), promoción tras
-        SL (Q2), fin de ciclo (tick) y heal.
+        SL/timeframe (Q2), fin de ciclo (tick) y heal.
+        `limit_override` re-pricea la ENTRY al precio actual (watchdog de
+        LIMIT stale); 0 = respetar settings.LIMIT_PRICE.
         """
         if not self._entry_needed(op):
+            return False
+        err = await self._check_entry_allowed(op.side, op.quantity)
+        if err is not None:
+            log.warning("ENTRY blocked for %s: %s", op.order_id, err)
+            event_bus.publish(OrderFailedEvent(
+                operation_id=op.order_id,
+                side=op.side,
+                error=err,
+                mode=settings.TRADING_MODE,
+                purpose="ENTRY",
+            ))
             return False
         await self._dispatch_order(
             op,
             success_event_factory=self._initial_order_factory(op),
             purpose="ENTRY",
+            limit_price_override=limit_override,
         )
         return True
 

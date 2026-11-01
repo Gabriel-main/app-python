@@ -151,6 +151,32 @@ def effective_min_notional(filters: SymbolFilters, trading_type: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Activo base (gate de venta en SPOT)
+# ---------------------------------------------------------------------------
+_KNOWN_QUOTES: tuple[str, ...] = (
+    "USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI",
+    "BTC", "ETH", "BNB", "TRY", "EUR", "BRL", "ARS",
+)
+
+
+def base_asset(symbol: str, quote: str = "USDT") -> str | None:
+    """Activo base de un símbolo (BTCUSDT → BTC). None si no se puede derivar.
+
+    Primero intenta con la cotización configurada (TRADE_CURRENCY); si el
+    símbolo no termina en ella, prueba las cotizaciones conocidas. Falla
+    hacia None (el caller aplica fail-open) en vez de adivinar.
+    """
+    sym = (symbol or "").upper()
+    q = (quote or "").upper()
+    if q and sym.endswith(q) and len(sym) > len(q):
+        return sym[: -len(q)]
+    for candidate in _KNOWN_QUOTES:
+        if sym.endswith(candidate) and len(sym) > len(candidate):
+            return sym[: -len(candidate)]
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Validación del formulario (SRP — se re-exporta desde ui.settings_sections)
 # ---------------------------------------------------------------------------
 def validate_amount(
