@@ -21,13 +21,19 @@ class ResponsiveDashboardLayout(DashboardLayout):
     BREAKPOINT: float = 600.0
 
     def build(self, components: dict[str, Any]) -> ft.Control:
-        stats_row = ft.Row(
+        stats_row = ft.ResponsiveRow(
             controls=[
-                components["stats"],
-                components["balance"],
+                ft.Container(
+                    content=components["stats"],
+                    col={"xs": 12, "sm": 6},
+                ),
+                ft.Container(
+                    content=components["balance"],
+                    col={"xs": 12, "sm": 6},
+                ),
             ],
             spacing=10,
-            expand=True,
+            run_spacing=10,
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
 

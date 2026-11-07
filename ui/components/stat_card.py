@@ -68,11 +68,13 @@ class StatCard(ft.Container, EventBusSubscriber):
             size=14,
             weight=ft.FontWeight.W_600,
             color=ft.Colors.WHITE,
+            expand=True,
+            no_wrap=True,
+            overflow=ft.TextOverflow.ELLIPSIS,
         )
 
         header_controls: list[ft.Control] = [
             self._title,
-            ft.Container(expand=True),
         ]
         if header_extras:
             header_controls.extend(header_extras)
@@ -80,6 +82,10 @@ class StatCard(ft.Container, EventBusSubscriber):
         # Construir filas de datos dinámicamente
         row_controls: list[ft.Control] = []
         for i, (label, text_control) in enumerate(rows):
+            text_control.no_wrap = True
+            text_control.max_lines = 1
+            text_control.overflow = ft.TextOverflow.ELLIPSIS
+
             if i > 0 and show_dividers:
                 row_controls.append(
                     ft.VerticalDivider(
@@ -94,11 +100,14 @@ class StatCard(ft.Container, EventBusSubscriber):
                             label,
                             size=10,
                             color=ft.Colors.BLUE_GREY_400,
+                            no_wrap=True,
+                            overflow=ft.TextOverflow.ELLIPSIS,
                         ),
                         text_control,
                     ],
                     spacing=2,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    expand=True,
                 )
             )
 
