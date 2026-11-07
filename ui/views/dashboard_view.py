@@ -85,6 +85,7 @@ class DashboardView(ft.Column):
                     self._chart,
                 ],
                 spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             ),
         )
 
@@ -94,6 +95,10 @@ class DashboardView(ft.Column):
     def did_mount(self) -> None:
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
         self._sync_from_settings()
+        if self.page and self.page.window:
+            w = self.page.window.width or 400
+            h = self.page.window.height or 850
+            self._on_resize(w, h)
 
     def will_unmount(self) -> None:
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
@@ -109,9 +114,10 @@ class DashboardView(ft.Column):
     # Responsive — se llama desde app_layout.on_resize
     # ------------------------------------------------------------------
     def _on_resize(self, width: float, height: float) -> None:
-        """Ajusta tamaños de fuente según ancho de pantalla."""
+        """Ajusta tamaños de fuente y gráficos según ancho de pantalla."""
         self._stats.on_resize(width, height)
         self._ticker.on_resize(width, height)
+        self._chart.on_resize(width, height)
 
     # ------------------------------------------------------------------
     # Handlers

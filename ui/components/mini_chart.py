@@ -33,6 +33,7 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         super().__init__()
         self._current_symbol = symbol
         self._prices: deque[float] = deque(maxlen=settings.PRICE_BUFFER_SIZE)
+        self._canvas_width: float | None = None
 
         self._canvas = cv.Canvas(
             content=ft.Container(),
@@ -48,6 +49,7 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
                 self._canvas,
             ],
             spacing=4,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
         self.bgcolor = ft.Colors.with_opacity(0.05, ft.Colors.WHITE)
         self.border_radius = 12
@@ -97,6 +99,18 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         update_batcher.mark_dirty(self._chart_label)
 
     # ------------------------------------------------------------------
+    # Responsive
+    # ------------------------------------------------------------------
+    def on_resize(self, width: float, height: float) -> None:
+        """Adapta el ancho del sparkline al ancho disponible en pantalla."""
+        # Margen total de paddings: view_container (44) + price_section (40) + chart (16)
+        available_width = max(width - 100, 200)
+        if self._canvas_width != available_width:
+            self._canvas_width = available_width
+            self._canvas.width = available_width
+            self._redraw()
+
+    # ------------------------------------------------------------------
     # Dibujo incremental del sparkline
     # ------------------------------------------------------------------
     def _redraw_incremental(self, new_price: float) -> None:
@@ -107,7 +121,8 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         if n < 2:
             return
 
-        canvas_width = max(self.width or 300, 200) - self.PADDING * 2
+        target_width = self._canvas_width or self.width or 300
+        canvas_width = max(target_width, 200) - self.PADDING * 2
         h = self.HEIGHT - self.PADDING * 2
 
         min_p = min(prices)
@@ -166,7 +181,8 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
         max_p = max(prices)
         price_range = max_p - min_p or 1
 
-        canvas_width = max(self.width or 300, 200) - self.PADDING * 2
+        target_width = self._canvas_width or self.width or 300
+        canvas_width = max(target_width, 200) - self.PADDING * 2
         h = self.HEIGHT - self.PADDING * 2
         n = len(prices)
 
