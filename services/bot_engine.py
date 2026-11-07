@@ -131,7 +131,10 @@ class TradingOperation:
 
     def promote_to_active(self) -> bool:
         """PENDING → ACTIVE: promoción de pendiente a operación activa."""
-        return self.transition_to("ACTIVE")
+        success = self.transition_to("ACTIVE")
+        if success:
+            self.created_at = time.time()
+        return success
 
     def mark_as_past(self) -> bool:
         """ACTIVE/PENDING → PAST: operación completada."""
@@ -202,6 +205,7 @@ class BotEngine:
 
         # Tracking de tareas de stop loss (para cleanup al detener)
         self._sl_tasks: set[asyncio.Task] = set()
+        self._sl_in_progress: set[str] = set()
 
         # Último saldo conocido (BalanceUpdateEvent) — gate de fondos.
         # None = aún sin evento → fail-open en validate_funds().
@@ -265,6 +269,7 @@ class BotEngine:
         for task in self._sl_tasks:
             task.cancel()
         self._sl_tasks.clear()
+        self._sl_in_progress.clear()
 
         event_bus.unsubscribe(PriceTickEvent, self._on_price_tick)
         event_bus.unsubscribe(BotStateChangedEvent, self._on_bot_state_changed)
@@ -655,6 +660,7 @@ class BotEngine:
 
         self._publish_update()
         self._operations.clear()
+        self._sl_in_progress.clear()
 
         event_bus.publish(TradingLifecycleEvent(
             action="STOPPED",
@@ -910,18 +916,28 @@ class BotEngine:
         for op in self._operations:
             if op.state != "ACTIVE":
                 continue
+            if not op.entry_filled:
+                continue
+
+            # Período de gracia: evitar que micro-fluctuaciones al momento
+            # de entrar o promoverse aprieten el SL inmediatamente
+            if time.time() - op.created_at < 3.0:
+                continue
+
+            sl_dist = self._calculate_sl_distance(price)
+            min_dist = sl_dist * 0.5
 
             if op.side == "BUY" and price > op.entry_price:
                 # Precio subió → SL sube (pero no baja)
-                new_sl = price - self._calculate_sl_distance(price)
-                if new_sl > op.stop_loss:
+                new_sl = price - sl_dist
+                if new_sl > op.stop_loss and (price - new_sl) >= min_dist:
                     op.stop_loss = new_sl
                     op.best_sl = max(op.best_sl, new_sl)
 
             elif op.side == "SELL" and price < op.entry_price:
                 # Precio bajó → SL baja (pero no sube)
-                new_sl = price + self._calculate_sl_distance(price)
-                if new_sl < op.stop_loss:
+                new_sl = price + sl_dist
+                if new_sl < op.stop_loss and (new_sl - price) >= min_dist:
                     op.stop_loss = new_sl
                     op.best_sl = min(op.best_sl, new_sl)
 
@@ -933,6 +949,8 @@ class BotEngine:
             if not op.entry_filled:
                 # Sin fill de entrada no hay posición: el SL no aplica aún
                 continue
+            if op.order_id in self._sl_in_progress:
+                continue
 
             triggered = False
             if op.side == "BUY" and price <= op.stop_loss:
@@ -941,6 +959,7 @@ class BotEngine:
                 triggered = True
 
             if triggered:
+                self._sl_in_progress.add(op.order_id)
                 log.info("STOP LOSS triggered: %s @ %.4f (SL=%.4f)",
                          op.side, price, op.stop_loss)
                 task = asyncio.create_task(
@@ -948,41 +967,73 @@ class BotEngine:
                     name=f"sl_{op.side}_{int(time.time())}",
                 )
                 self._sl_tasks.add(task)
-                task.add_done_callback(self._sl_tasks.discard)
+                task.add_done_callback(lambda t, oid=op.order_id: (
+                    self._sl_tasks.discard(t),
+                    self._sl_in_progress.discard(oid),
+                ))
 
     async def _execute_stop_loss(self, op: TradingOperation, trigger_price: float) -> None:
         """Ejecuta la orden de stop loss (EXIT → siempre MARKET) y promueve."""
-        order_event = await self._dispatch_order(
-            op, trigger_price,
-            success_event_factory=lambda e: StopLossEvent(
-                order_id=e.order_id,
-                side=op.side,
-                quantity=op.quantity,
-                price=trigger_price,
-                mode=settings.TRADING_MODE,
-            ),
-            purpose="EXIT",
-        )
-        if order_event is None:
-            return
+        try:
+            order_event = await self._dispatch_order(
+                op, trigger_price,
+                success_event_factory=lambda e: StopLossEvent(
+                    order_id=e.order_id,
+                    side=op.side,
+                    quantity=op.quantity,
+                    price=trigger_price,
+                    mode=settings.TRADING_MODE,
+                ),
+                purpose="EXIT",
+            )
+            if order_event is None:
+                return
 
-        # Race guard: el usuario detuvo el bot mientras el EXIT estaba en
-        # vuelo → no promover ni colocar entrada de la PENDING.
-        if not self._active:
-            log.info("Bot stopped during SL execution — skipping promotion")
-            return
+            # Race guard: el usuario detuvo el bot mientras el EXIT estaba en
+            # vuelo → no promover ni colocar entrada de la PENDING.
+            if not self._active:
+                log.info("Bot stopped during SL execution — skipping promotion")
+                return
 
-        # State Pattern: transición validada ACTIVE → PAST
-        op.mark_as_past()
+            # State Pattern: transición validada ACTIVE → PAST
+            op.mark_as_past()
 
-        # Q2: promover PENDING → ACTIVE y colocar su ENTRY de inmediato
-        # ("dentro del tiempo" — paso 2 del diagrama).
-        promoted = self._promote_pending_to_active()
-        if promoted is not None:
-            await self._place_entry(promoted)
-        self._publish_update()
+            # Retirar operaciones PAST para que no queden en memoria
+            self._operations = [o for o in self._operations if o.state != "PAST"]
 
-        log.info("SL executed, operation marked PAST: %s", op.order_id)
+            # Q2: promover PENDING → ACTIVE y colocar su ENTRY de inmediato
+            # ("dentro del tiempo" — paso 2 del diagrama).
+            promoted = self._promote_pending_to_active()
+            if promoted is not None:
+                await self._place_entry(promoted)
+
+                # Diagrama paso 2: Crear PENDING complementaria inmediatamente
+                pa = self._current_price
+                if pa > 0:
+                    sl_dist = self._calculate_sl_distance(pa)
+                    quantity = self._calculate_quantity(pa)
+                    if quantity <= 0:
+                        quantity = promoted.quantity
+
+                    complement_side = "SELL" if promoted.side == "BUY" else "BUY"
+                    has_pending = any(
+                        o.state == "PENDING" and o.side == complement_side
+                        for o in self._operations
+                    )
+                    if not has_pending:
+                        new_pending = self._create_operation(
+                            complement_side, "PENDING", pa, sl_dist, quantity
+                        )
+                        self._operations.append(new_pending)
+                        log.info(
+                            "Immediate PENDING %s created post-promotion (ACTIVE=%s)",
+                            complement_side, promoted.order_id,
+                        )
+
+            self._publish_update()
+            log.info("SL executed, operation marked PAST: %s", op.order_id)
+        finally:
+            self._sl_in_progress.discard(op.order_id)
 
     def _promote_pending_to_active(self) -> TradingOperation | None:
         """Promueve la primera PENDING a ACTIVE (State Pattern).

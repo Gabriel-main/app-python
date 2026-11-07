@@ -1222,3 +1222,80 @@ async def test_successful_entry_resets_heal_attempts():
         assert result is not None
         assert op.entry_filled is True
         assert engine._heal_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_guard_prevents_duplicate_tasks():
+    """Bug 1 fix: _check_stop_losses no re-dispara múltiples tareas de SL."""
+    engine = _engine()
+    engine._active = True
+    op = _make_op(side="BUY", entry_filled=True)
+    op.stop_loss = 65000.0
+    engine._operations = [op]
+
+    with patch.object(engine, "_execute_stop_loss", side_effect=lambda *args: None) as mock_sl:
+        engine._check_stop_losses(64900.0)
+        assert op.order_id in engine._sl_in_progress
+        # Segundo tick por debajo de SL
+        engine._check_stop_losses(64800.0)
+
+        # Solo debe haber creado 1 tarea
+        assert len(engine._sl_tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_creates_immediate_pending():
+    """Bug 3 fix: _execute_stop_loss promueve y crea PENDING complementaria inmediatamente."""
+    engine = _engine()
+    engine._active = True
+    with patch("services.bot_engine.settings", _make_settings(order_type="MARKET", limit_price=0.0)), \
+         patch("services.bot_engine.event_bus"), \
+         patch("services.bot_engine.db_queue"):
+        engine._current_price = 65000.0
+        active = _make_op(side="BUY", entry_filled=True)
+        pending = TradingOperation(
+            side="SELL", state="PENDING",
+            entry_price=64900.0, stop_loss=65100.0,
+            quantity=0.001, order_id="OV-TEST01",
+            entry_filled=False,
+        )
+        engine._operations = [active, pending]
+
+        await engine._execute_stop_loss(active, 64900.0)
+
+        # La activa vieja (PAST) fue retirada de memoria
+        assert active not in engine._operations
+
+        # pending fue promovida a ACTIVE
+        active_ops = [o for o in engine._operations if o.state == "ACTIVE"]
+        assert len(active_ops) == 1
+        assert active_ops[0].order_id == "OV-TEST01"
+
+        # Se creó inmediatamente una PENDING complementaria (BUY)
+        pending_ops = [o for o in engine._operations if o.state == "PENDING"]
+        assert len(pending_ops) == 1
+        assert pending_ops[0].side == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_trailing_stop_grace_period_and_min_distance():
+    """Bug 2 fix: trailing stop respeta grace period y distancia mínima."""
+    engine = _engine()
+    op = _make_op(side="BUY", entry_filled=True)
+    op.entry_price = 65000.0
+    op.stop_loss = 64000.0
+    # Recién creada: creada hace 0 segundos (< 3.0s grace period)
+    op.created_at = 100.0
+    engine._operations = [op]
+
+    with patch("time.time", return_value=101.0):  # solo 1 segundo después
+        engine._update_trailing_stop(66000.0)
+        # No debe haber cambiado el SL por estar en grace period
+        assert op.stop_loss == 64000.0
+
+    with patch("time.time", return_value=110.0), \
+         patch.object(engine, "_calculate_sl_distance", return_value=500.0):
+        # 10s después, precio subió a 66000. new_sl = 66000 - 500 = 65500.
+        engine._update_trailing_stop(66000.0)
+        assert op.stop_loss == 65500.0
+
