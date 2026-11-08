@@ -644,8 +644,8 @@ class BotEngine:
         # del diagrama: "se ejecutan las 2 operaciones a la vez").
         await self._place_entry(buy_op)
 
-        self._publish_update()
         self._start_timeframe_timer()
+        self._publish_update()
         return True
 
     async def _stop_trading(self) -> None:
@@ -812,8 +812,8 @@ class BotEngine:
             while self._running and self._active:
                 remaining = self._timeframe_duration - (time.time() - self._timeframe_start)
                 if remaining <= 0:
-                    await self._on_timeframe_tick()
                     self._timeframe_start = time.time()
+                    await self._on_timeframe_tick()
                 else:
                     # Publicar progreso cada segundo
                     self._publish_update(remaining)
@@ -1441,8 +1441,17 @@ class BotEngine:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _publish_update(self, remaining: float = 0.0) -> None:
+    def _get_timeframe_remaining(self) -> float:
+        """Calcula el tiempo restante de la temporalidad actual sin saltar a cero."""
+        if not self._active or self._timeframe_duration <= 0 or self._timeframe_start <= 0:
+            return 0.0
+        remaining = self._timeframe_duration - (time.time() - self._timeframe_start)
+        return max(0.0, remaining)
+
+    def _publish_update(self, remaining: float | None = None) -> None:
         """Publica el estado actual de las operaciones."""
+        if remaining is None:
+            remaining = self._get_timeframe_remaining()
         event_bus.publish(OperationUpdateEvent(
             operations=[op.to_event() for op in self._operations],
             timeframe_remaining=remaining,
