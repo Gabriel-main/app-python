@@ -388,10 +388,12 @@ class BotEngine:
         await self._sizer.refresh(settings.TRADING_SYMBOL, settings.TRADING_TYPE)
 
         # Recrear executor si PAPER ↔ LIVE cambió
-        if event.mode != old_mode and self._executor is not None:
-            await self._executor.close()
-            self._executor = create_executor(event.mode)
-            log.info("Executor recreated: %s → %s", old_mode, event.mode)
+        if event.mode != old_mode:
+            self._last_balance = None
+            if self._executor is not None:
+                await self._executor.close()
+                self._executor = create_executor(event.mode)
+                log.info("Executor recreated: %s → %s", old_mode, event.mode)
 
         # Re-aplicar leverage en Binance si cambió leverage o símbolo
         if (
@@ -587,15 +589,23 @@ class BotEngine:
             return False
 
         # F4b: gate de fondos — mismo validate_funds que la UI (DRY).
-        # Sin evento de saldo aún (_last_balance None) → fail-open:
-        # la UI ya bloquea y Binance sigue siendo la autoridad final.
+        # En modo PAPER, si aún no hay evento o bal es 0, usamos paper_balance.
         bal = self._last_balance
+        if settings.TRADING_MODE == "PAPER" and (bal is None or bal.free == 0.0):
+            from services.paper_balance import paper_balance
+            paper_bal = paper_balance.get_balance()
+            free = paper_bal
+            available = paper_bal
+        else:
+            free = bal.free if bal is not None else None
+            available = bal.available if bal is not None else None
+
         funds_err = validate_funds(
             settings.TRADE_AMOUNT,
             settings.TRADING_TYPE,
             settings.LEVERAGE,
-            free=bal.free if bal is not None else None,
-            available=bal.available if bal is not None else None,
+            free=free,
+            available=available,
             mode=settings.TRADING_MODE,
             asset=settings.TRADE_CURRENCY,
         )

@@ -303,14 +303,30 @@ class SettingsView(ft.Column):
     def _balance_error_msg(self) -> str | None:
         """Error de fondos: saldo vs monto, con la regla de Binance
         (FUTURES valida margen = monto ÷ leverage vs availableBalance)."""
+        mode = self._mode_section.get_mode()
         bal = self._balance_ref
+
+        if mode == "PAPER":
+            # Si el sistema actual está en LIVE, o aún no hay balance cacheado,
+            # el saldo para el modo simulador debe ser el saldo virtual (paper_balance).
+            if settings.TRADING_MODE != "PAPER" or bal is None:
+                from services.paper_balance import paper_balance
+                free = paper_balance.get_balance()
+                available = free
+            else:
+                free = bal.free
+                available = bal.available
+        else:
+            free = bal.free if bal is not None else None
+            available = bal.available if bal is not None else None
+
         return validate_funds(
             self._params_section.get_amount(),
             self._type_section.get_trading_type(),
             self._type_section.get_leverage(),
-            free=bal.free if bal is not None else None,
-            available=bal.available if bal is not None else None,
-            mode=self._mode_section.get_mode(),
+            free=free,
+            available=available,
+            mode=mode,
             asset=settings.TRADE_CURRENCY,
         )
 

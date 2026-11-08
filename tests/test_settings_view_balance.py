@@ -68,3 +68,18 @@ def test_live_futures_margin_covered_passes():
 def test_unknown_balance_fails_open():
     view = _view(balance=None)
     assert view._balance_error_msg() is None
+
+
+def test_switch_from_live_to_paper_uses_paper_balance(monkeypatch):
+    """Cuando el sistema está en LIVE (con 0.0 de saldo real), seleccionar PAPER
+    en el formulario debe usar el saldo simulado (paper_balance) y no bloquear."""
+    from config.settings import settings
+    monkeypatch.setattr(settings, "TRADING_MODE", "LIVE")
+    view = _view(
+        amount="10.0",
+        mode="PAPER",
+        balance=BalanceUpdateEvent(
+            asset="USDT", trading_type="FUTURES", free=0.0, available=0.0,
+        ),
+    )
+    assert view._balance_error_msg() is None
