@@ -710,14 +710,19 @@ class BotEngine:
         sl_dist: float,
         quantity: float,
     ) -> TradingOperation:
-        """Crea una operación con los parámetros según el modelo dual OC/OV."""
+        """Crea una operación con los parámetros según el modelo dual OC/OV.
+
+        entry_price = Pa (precio de mercado actual): tanto en PAPER como en
+        LIVE la entrada se ejecuta al precio real del mercado.
+        stop_loss = Pa ± SL_dist según el lado.
+        """
         prefix = "OC" if side == "BUY" else "OV"
 
+        entry_price = pa  # Entrada al precio de mercado actual
+
         if side == "BUY":
-            entry_price = pa + sl_dist  # Pe = Pa + SL
             stop_loss = pa - sl_dist    # PSL = Pa - SL
         else:
-            entry_price = pa - sl_dist  # Pe = Pa - SL
             stop_loss = pa + sl_dist    # PSL = Pa + SL
 
         return TradingOperation(
@@ -1015,6 +1020,16 @@ class BotEngine:
             # ("dentro del tiempo" — paso 2 del diagrama).
             promoted = self._promote_pending_to_active()
             if promoted is not None:
+                pa_promoted = trigger_price if trigger_price > 0 else self._current_price
+                if pa_promoted > 0:
+                    sl_dist_promoted = self._calculate_sl_distance(pa_promoted)
+                    promoted.entry_price = pa_promoted
+                    if promoted.side == "BUY":
+                        promoted.stop_loss = pa_promoted - sl_dist_promoted
+                    else:
+                        promoted.stop_loss = pa_promoted + sl_dist_promoted
+                    promoted.best_sl = promoted.stop_loss
+
                 await self._place_entry(promoted)
 
                 # Diagrama paso 2: Crear PENDING complementaria inmediatamente
@@ -1215,6 +1230,8 @@ class BotEngine:
 
         if purpose == "ENTRY":
             op.entry_filled = True
+            if placement.fill_price > 0:
+                op.entry_price = placement.fill_price
             self._reset_heal_state()  # entrada ok: los reintentos vuelven a 0
 
         order_event = self._build_order_event(op, placement, request, purpose)
@@ -1251,6 +1268,8 @@ class BotEngine:
         op = working.operation
         if op.state != "PAST":
             op.entry_filled = True
+            if fill.price > 0:
+                op.entry_price = fill.price
             self._reset_heal_state()  # entrada ok: los reintentos vuelven a 0
         else:
             log.warning(

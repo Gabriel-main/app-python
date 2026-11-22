@@ -26,6 +26,7 @@ from core.events import (
     ConnectionStatusEvent,
     ConnectionStatusRequestEvent,
     ConnectionStatusSnapshotEvent,
+    OrderExecutedEvent,
     OrderFillEvent,
     PriceTickEvent,
     SettingsUpdatedEvent,
@@ -49,7 +50,7 @@ class MockTickGenerator:
         "BTCUSDT": 65_000.0,
         "ETHUSDT": 3_500.0,
         "BNBUSDT": 600.0,
-        "SOLUSDT": 150.0,
+        "SOLUSDT": 89.0,
         "XRPUSDT": 0.60,
         "ADAUSDT": 0.45,
         "DOGEUSDT": 0.12,
@@ -61,22 +62,23 @@ class MockTickGenerator:
 
     def reset_for_symbol(self, symbol: str) -> None:
         """Reset del precio base al cambiar de símbolo."""
-        self._base_price = self._BASE_PRICES.get(symbol, 100.0)
+        self._base_price = self._BASE_PRICES.get(symbol.upper(), 100.0)
         self._tick_count = 0
 
     def next_tick(self, symbol: str) -> PriceTickEvent:
         self._tick_count += 1
-        noise = random.gauss(0, 50)
-        wave = math.sin(self._tick_count * 0.1) * 200
-        self._base_price = max(1_000, self._base_price + noise + wave * 0.05)
+        pct_noise = random.gauss(0, 0.001)
+        pct_wave = math.sin(self._tick_count * 0.1) * 0.002
+        self._base_price = max(0.0001, self._base_price * (1 + pct_noise + pct_wave))
 
+        decimals = 4 if self._base_price < 10 else 2
         return PriceTickEvent(
             symbol=symbol,
-            price=round(self._base_price, 2),
+            price=round(self._base_price, decimals),
             change_pct=round(random.uniform(-3.0, 3.0), 2),
             volume=round(random.uniform(1_000_000, 5_000_000), 2),
-            high_24h=round(self._base_price * 1.02, 2),
-            low_24h=round(self._base_price * 0.98, 2),
+            high_24h=round(self._base_price * 1.02, decimals),
+            low_24h=round(self._base_price * 0.98, decimals),
             timestamp=time.time(),
         )
 
@@ -96,6 +98,7 @@ class BinanceService:
         self._mock = MockTickGenerator()
         self._retry_count: int = 0
         self._connection_status: str = "DISCONNECTED"
+        self._restart_lock = asyncio.Lock()
 
         # Balance auto-refresh
         self._balance_task: asyncio.Task | None = None
@@ -124,6 +127,7 @@ class BinanceService:
         self._retry_count = 0
         event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
+        event_bus.subscribe(OrderExecutedEvent, self._on_order_executed)
         self._stream_task = asyncio.create_task(
             self._run_with_reconnect(self._run_ticker_stream), name="binance_stream"
         )
@@ -154,6 +158,7 @@ class BinanceService:
         self._running = False
         event_bus.unsubscribe(SettingsUpdatedEvent, self._on_settings_updated)
         event_bus.unsubscribe(ConnectionStatusRequestEvent, self._on_status_request)
+        event_bus.unsubscribe(OrderExecutedEvent, self._on_order_executed)
         self._stop_balance_loop()
         await self._stop_user_stream()
         if self._stream_task:
@@ -162,6 +167,7 @@ class BinanceService:
                 await self._stream_task
             except asyncio.CancelledError:
                 pass
+            self._stream_task = None
         await self._close_client()
         log.info("BinanceService stopped")
 
@@ -188,32 +194,44 @@ class BinanceService:
 
     async def restart(self) -> None:
         """Reinicia el servicio (usado tras cambio de configuración)."""
-        await self.stop()
+        async with self._restart_lock:
+            await self.stop()
+            self._balance_cache = None
+            self._balance_cache_time = 0.0
+            self._running = True
+            self._retry_count = 0
+            event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
+            # Fix: stop() desuscribe ConnectionStatusRequestEvent — re-suscribir
+            # aquí, si no, cualquier cambio de settings rompe el snapshot del
+            # ConnectionIndicator.
+            event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
+            event_bus.subscribe(OrderExecutedEvent, self._on_order_executed)
+            self._start_balance_loop()
+            self._stream_task = asyncio.create_task(
+                self._run_with_reconnect(self._run_ticker_stream), name="binance_stream"
+            )
+            self._start_user_stream()
+
+    async def _on_order_executed(self, event: OrderExecutedEvent) -> None:
+        """En LIVE, una orden invalida la caché y publica saldo fresco."""
+        if settings.TRADING_MODE != "LIVE":
+            return
         self._balance_cache = None
         self._balance_cache_time = 0.0
-        self._running = True
-        self._retry_count = 0
-        event_bus.subscribe(SettingsUpdatedEvent, self._on_settings_updated)
-        # Fix: stop() desuscribe ConnectionStatusRequestEvent — re-suscribir
-        # aquí, si no, cualquier cambio de settings rompe el snapshot del
-        # ConnectionIndicator.
-        event_bus.subscribe(ConnectionStatusRequestEvent, self._on_status_request)
-        self._start_balance_loop()
-        self._stream_task = asyncio.create_task(
-            self._run_with_reconnect(self._run_ticker_stream), name="binance_stream"
-        )
-        self._start_user_stream()
+        balance = await self.get_balance(asset=settings.TRADE_CURRENCY)
+        event_bus.publish(balance)
 
     # ------------------------------------------------------------------
     # Loop con reconexión automática (backoff exponencial)
     # ------------------------------------------------------------------
 
     async def _run_ticker_stream(self) -> None:
-        """Selecciona live/mock según modo y keys (un solo punto de ramificación)."""
-        if settings.TRADING_MODE == "LIVE" and settings.has_api_keys():
-            await self._run_live_stream()
-        else:
-            await self._run_mock_stream()
+        """Conecta al WebSocket público de Binance para obtener ticks reales del mercado.
+
+        Binance provee datos públicos de mercado (Spot y Futures) sin requerir API keys.
+        Por tanto, tanto en LIVE como en PAPER se conecta al stream real de Binance.
+        """
+        await self._run_live_stream()
 
     async def _run_with_reconnect(
         self,
@@ -269,8 +287,10 @@ class BinanceService:
                         self._connection_status = "DISCONNECTED"
                         event_bus.publish(ConnectionStatusEvent(
                             status="DISCONNECTED",
-                            message="Máximo de reintentos alcanzado."
+                            message="Máximo de reintentos alcanzado. Usando simulación...",
                         ))
+                    if runner == self._run_ticker_stream:
+                        await self._run_mock_stream()
                     break
                 await asyncio.sleep(delay)
 

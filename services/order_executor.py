@@ -172,7 +172,9 @@ class PaperExecutor(OrderExecutor):
                 mode="PAPER",
             )
 
-        fill_price = request.entry_price if request.entry_price > 0 else 0.0
+        fill_price = request.entry_price if request.entry_price > 0 else (
+            request.market_price if request.market_price > 0 else 0.0
+        )
         log.info(
             "[PAPER] %s %s %.6f MARKET @ %.4f",
             request.side, request.symbol, request.quantity, fill_price,
