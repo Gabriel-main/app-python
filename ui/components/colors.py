@@ -67,11 +67,11 @@ SIGNAL_COLORS: dict[str, tuple[ft.Color, ft.Color]] = {
 # ---------------------------------------------------------------------------
 # Estado de conexión WebSocket
 # ---------------------------------------------------------------------------
-CONNECTION_COLORS: dict[str, tuple[ft.Color, str, str]] = {
-    "CONNECTING":   (ft.Colors.AMBER_400,  "wifi_find",       "Conectando..."),
-    "CONNECTED":    (ft.Colors.GREEN_400,  "wifi",            "Conectado"),
-    "DISCONNECTED": (ft.Colors.RED_400,    "wifi_off",        "Desconectado"),
-    "RECONNECTING": (ft.Colors.ORANGE_400, "wifi_tethering",  "Reconectando..."),
+CONNECTION_COLORS: dict[str, tuple[ft.Color, ft.Icons, str]] = {
+    "CONNECTING":   (ft.Colors.AMBER_400,  ft.Icons.WIFI_FIND,       "Conectando a Binance..."),
+    "CONNECTED":    (ft.Colors.GREEN_400,  ft.Icons.WIFI,            "Binance API (En vivo)"),
+    "DISCONNECTED": (ft.Colors.RED_400,    ft.Icons.WIFI_OFF,        "Desconectado de Binance"),
+    "RECONNECTING": (ft.Colors.ORANGE_400, ft.Icons.WIFI_TETHERING,  "Reconectando a Binance..."),
 }
 
 

@@ -41,11 +41,26 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
             height=self.HEIGHT,
         )
 
-        self._chart_label = ft.Text("Precio 1m", size=10, color=ft.Colors.BLUE_GREY_400)
+        tt = settings.TRADING_TYPE.capitalize()
+        self._chart_label = ft.Text(
+            f"Fuente: Binance {tt} API (Tiempo Real)",
+            size=10,
+            weight=ft.FontWeight.W_500,
+            color=ft.Colors.CYAN_300,
+        )
+
+        self._source_badge = ft.Row(
+            controls=[
+                ft.Icon(ft.Icons.VERIFIED, size=12, color=ft.Colors.CYAN_300),
+                self._chart_label,
+            ],
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
         self.content = ft.Column(
             controls=[
-                self._chart_label,
+                self._source_badge,
                 self._canvas,
             ],
             spacing=4,
@@ -87,15 +102,13 @@ class MiniChart(ft.Container, SymbolAwareSubscriber):
 
     async def _on_settings_updated(self, event: SettingsUpdatedEvent) -> None:
         self.sync_symbol()
+        tt = event.trading_type.capitalize()
+        self._chart_label.value = f"Fuente: Binance {tt} API (Tiempo Real)"
+        update_batcher.mark_dirty(self._chart_label)
 
     async def _on_balance_update(self, event: BalanceUpdateEvent) -> None:
-        type_labels = {
-            "SPOT": "Precio Spot",
-            "FUTURES": "Precio Futures",
-            "MARGIN": "Precio Margin",
-        }
-        label = type_labels.get(event.trading_type, "Precio 1m")
-        self._chart_label.value = label
+        tt = event.trading_type.capitalize()
+        self._chart_label.value = f"Fuente: Binance {tt} API (Tiempo Real)"
         update_batcher.mark_dirty(self._chart_label)
 
     # ------------------------------------------------------------------

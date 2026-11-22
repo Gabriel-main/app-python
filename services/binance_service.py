@@ -184,11 +184,12 @@ class BinanceService:
 
     def _get_status_message(self) -> str:
         """Genera el mensaje según el estado actual."""
+        tt = settings.TRADING_TYPE.capitalize()
         messages = {
-            "CONNECTING":   f"Conectando a {settings.TRADING_SYMBOL}...",
-            "CONNECTED":    f"Conectado a {settings.TRADING_SYMBOL} ({settings.TRADING_TYPE})",
-            "DISCONNECTED": "Desconectado",
-            "RECONNECTING": f"Reintentando... (intento {self._retry_count})",
+            "CONNECTING":   f"Conectando a Binance {tt} ({settings.TRADING_SYMBOL})...",
+            "CONNECTED":    f"Binance {tt} API: {settings.TRADING_SYMBOL} (En vivo)",
+            "DISCONNECTED": "Desconectado de Binance",
+            "RECONNECTING": f"Reconectando a Binance {tt}... (intento {self._retry_count})",
         }
         return messages.get(self._connection_status, self._connection_status)
 
@@ -326,9 +327,10 @@ class BinanceService:
 
             async with stream_context as ts:
                 self._connection_status = "CONNECTED"
+                tt = settings.TRADING_TYPE.capitalize()
                 event_bus.publish(ConnectionStatusEvent(
                     status="CONNECTED",
-                    message=f"Conectado a {settings.TRADING_SYMBOL} ({settings.TRADING_TYPE})"
+                    message=f"Binance {tt} API: {settings.TRADING_SYMBOL} (En vivo)"
                 ))
                 log.info("WebSocket connected: %s@ticker (%s)", symbol_lower, settings.TRADING_TYPE)
 
@@ -538,7 +540,7 @@ class BinanceService:
         self._connection_status = "CONNECTED"
         event_bus.publish(ConnectionStatusEvent(
             status="CONNECTED",
-            message="Modo Simulación (Sin API Keys)"
+            message=f"Simulador Local: {settings.TRADING_SYMBOL} (Sin conexión a Binance)"
         ))
         self._mock.reset_for_symbol(settings.TRADING_SYMBOL)
         interval = 1.5

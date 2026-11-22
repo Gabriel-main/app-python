@@ -66,12 +66,15 @@ class ConnectionIndicator(ft.Row):
     def _apply_status(self, status: str, message: str) -> None:
         """Aplica el estado visual (DRY: lógica unificada)."""
         color, icon_name, default_text = CONNECTION_COLORS.get(
-            status, (ft.Colors.GREY_400, "help", status)
+            status, (ft.Colors.GREY_400, ft.Icons.HELP, status)
         )
         text = message or default_text
 
         self._dot.bgcolor = color
-        self._icon.name = icon_name
+        if hasattr(icon_name, "value") or not isinstance(icon_name, str):
+            self._icon.icon = icon_name
+        else:
+            self._icon.icon = getattr(ft.Icons, str(icon_name).upper(), ft.Icons.WIFI)
         self._icon.color = color
         self._label.value = text
         self._label.color = color
