@@ -129,10 +129,11 @@ class OrdersView(ft.Column):
                 current = self._records.get(order_id)
                 if current is None:
                     self._records[order_id] = order
-                elif order.get("pnl") is not None:
-                    # El estado en memoria es más fresco que la DB;
-                    # la DB solo aporta el PnL calculado al cerrar.
-                    current["pnl"] = order["pnl"]
+                else:
+                    if order.get("pnl") is not None:
+                        current["pnl"] = order["pnl"]
+                    if order.get("purpose") is not None:
+                        current["purpose"] = order["purpose"]
 
             self._loading = False
             self._rebuild()
@@ -159,6 +160,8 @@ class OrdersView(ft.Column):
             "price": event.price,
             "mode": event.mode,
             "status": "PENDING",
+            "entry_price": 0.0,
+            "purpose": "ENTRY",
             "pnl": None,
             "timestamp": event.timestamp,
         })
@@ -183,7 +186,9 @@ class OrdersView(ft.Column):
             "price": event.price,
             "mode": event.mode,
             "status": "FILLED",
-            "pnl": None,
+            "entry_price": getattr(event, "entry_price", 0.0),
+            "purpose": getattr(event, "purpose", "ENTRY"),
+            "pnl": getattr(event, "pnl", None),
             "timestamp": event.timestamp,
         }
 

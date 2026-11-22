@@ -70,6 +70,9 @@ def test_set_pnl_formats_positive_and_negative():
     card.set_pnl(-3.0)
     assert card.pnl_text == "-3.00 USDT"
     assert card._pnl.color == ft.Colors.RED_400
+    card.set_pnl(-0.0034)
+    assert card.pnl_text == "-0.0034 USDT"
+    assert card._pnl.color == ft.Colors.RED_400
 
 
 def test_set_pnl_is_idempotent():
@@ -118,3 +121,17 @@ def test_will_unmount_cancels_running_flash():
     card = asyncio.run(scenario())
     assert card.opacity == 1.0
     assert card.bgcolor == _CARD_BG
+
+
+def test_card_renders_entry_purpose_badge():
+    card = OrderCard(_record(purpose="ENTRY"))
+    assert card.purpose == "ENTRY"
+    assert card._purpose_chip.content.value == "ENTRADA"
+
+
+def test_card_renders_exit_purpose_badge_and_entry_price():
+    card = OrderCard(_record(purpose="EXIT", price=70.45, entry_price=70.49, pnl=-0.04))
+    assert card.purpose == "EXIT"
+    assert card._purpose_chip.content.value == "CIERRE SL"
+    assert "Pe: $70.49" in card._detail.value
+    assert card.pnl_text == "-0.04 USDT"

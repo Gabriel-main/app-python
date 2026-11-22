@@ -65,6 +65,7 @@ class Order(SQLModel, table=True):
     status: str = Field(default="FILLED")   # "FILLED" | "PENDING" | "CANCELLED"
     limit_price: float = 0.0           # precio límite original (se conserva tras el fill)
     entry_price: float = 0.0           # Pe teórica de la operación asociada
+    purpose: str = Field(default="ENTRY")   # "ENTRY" | "EXIT"
     pnl: Optional[float] = None        # Profit & Loss calculado al cerrar
     timestamp: float = Field(default_factory=time.time)
 

@@ -57,6 +57,7 @@ _COLUMN_DEFAULTS: dict[str, dict[str, str]] = {
         "trading_type": "'SPOT'",
         "leverage": "1",
         "order_type": "'MARKET'",
+        "purpose": "'ENTRY'",
     },
     "positions": {
         "mark_price": "0.0",

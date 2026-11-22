@@ -49,6 +49,8 @@ class OrderCard(ft.Card):
         mode = order.get("mode", "PAPER")
         pnl = order.get("pnl")
         status = str(order.get("status") or "FILLED")
+        purpose = str(order.get("purpose") or "ENTRY").upper()
+        entry_price = float(order.get("entry_price") or 0.0)
 
         side_fg, side_bg = SIDE_COLORS.get(side, (ft.Colors.WHITE, ft.Colors.GREY_800))
         side_label = SIDE_LABELS.get(side, side)
@@ -56,13 +58,17 @@ class OrderCard(ft.Card):
         status_color, status_label = STATUS_COLORS.get(status, (_UNKNOWN_COLOR, status))
         self._status = status
         self._status_color = status_color
+        self._purpose = purpose
         self._pnl_value = pnl
 
         pnl_text = "---"
         pnl_color = ft.Colors.BLUE_GREY_400
         if pnl is not None:
             sign = "+" if pnl >= 0 else ""
-            pnl_text = f"{sign}{pnl:.2f} USDT"
+            if abs(pnl) < 0.01 and pnl != 0:
+                pnl_text = f"{sign}{pnl:.4f} USDT"
+            else:
+                pnl_text = f"{sign}{pnl:.2f} USDT"
             pnl_color = ft.Colors.GREEN_400 if pnl >= 0 else ft.Colors.RED_400
 
         self._symbol = ft.Text(
@@ -71,9 +77,15 @@ class OrderCard(ft.Card):
             weight=ft.FontWeight.W_600,
             color=ft.Colors.WHITE,
         )
+
+        price_val = float(order.get("price") or 0)
+        qty_val = float(order.get("quantity") or 0)
+        detail_str = f"${price_val:,.2f}  ×  {qty_val:.4f}"
+        if purpose == "EXIT" and entry_price > 0:
+            detail_str += f"  (Pe: ${entry_price:,.2f})"
+
         self._detail = ft.Text(
-            f"${float(order.get('price') or 0):,.2f}  ×  "
-            f"{float(order.get('quantity') or 0):.4f}",
+            detail_str,
             size=11,
             color=ft.Colors.BLUE_GREY_300,
         )
@@ -88,6 +100,23 @@ class OrderCard(ft.Card):
         self._mode_chip = self._make_chip(mode, self._mode_color)
         self._timestamp = ft.Text(_fmt_timestamp(order.get("timestamp", 0)), size=9, color=ft.Colors.BLUE_GREY_500)
 
+        purpose_label = "CIERRE SL" if purpose == "EXIT" else "ENTRADA"
+        purpose_fg = ft.Colors.AMBER_300 if purpose == "EXIT" else ft.Colors.CYAN_300
+        purpose_border = ft.Colors.AMBER_400 if purpose == "EXIT" else ft.Colors.CYAN_400
+        purpose_bg = (
+            ft.Colors.with_opacity(0.18, ft.Colors.AMBER_500)
+            if purpose == "EXIT"
+            else ft.Colors.with_opacity(0.18, ft.Colors.CYAN_500)
+        )
+        self._purpose_chip = ft.Container(
+            content=ft.Text(purpose_label, size=8, weight=ft.FontWeight.BOLD, color=purpose_fg),
+            bgcolor=purpose_bg,
+            border=ft.Border.all(0.8, purpose_border),
+            border_radius=4,
+            padding=ft.Padding(left=4, right=4, top=1, bottom=1),
+            alignment=ft.Alignment.CENTER,
+        )
+
         self.elevation = 0
         self.bgcolor = _CARD_BG
         self.animate_opacity = ft.Animation(300, ft.AnimationCurve.EASE_OUT)
@@ -96,11 +125,20 @@ class OrderCard(ft.Card):
             padding=ft.Padding(left=16, right=16, top=12, bottom=12),
             content=ft.Row(
                 controls=[
-                    ft.Container(
-                        content=ft.Text(side_label, size=11, weight=ft.FontWeight.BOLD, color=side_fg),
-                        bgcolor=side_bg,
-                        border_radius=6,
-                        padding=ft.Padding(left=8, right=8, top=4, bottom=4),
+                    ft.Column(
+                        controls=[
+                            ft.Container(
+                                content=ft.Text(side_label, size=11, weight=ft.FontWeight.BOLD, color=side_fg),
+                                bgcolor=side_bg,
+                                border_radius=6,
+                                padding=ft.Padding(left=8, right=8, top=4, bottom=4),
+                                alignment=ft.Alignment.CENTER,
+                            ),
+                            self._purpose_chip,
+                        ],
+                        spacing=4,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        alignment=ft.MainAxisAlignment.CENTER,
                     ),
                     ft.Column(
                         controls=[self._symbol, self._detail],
@@ -158,6 +196,10 @@ class OrderCard(ft.Card):
         return self._status
 
     @property
+    def purpose(self) -> str:
+        return self._purpose
+
+    @property
     def pnl_text(self) -> str:
         return self._pnl.value or ""
 
@@ -165,7 +207,11 @@ class OrderCard(ft.Card):
         if value == self._pnl_value:
             return
         self._pnl_value = value
-        self._pnl.value = f"{'+' if value >= 0 else ''}{value:.2f} USDT"
+        sign = "+" if value >= 0 else ""
+        if abs(value) < 0.01 and value != 0:
+            self._pnl.value = f"{sign}{value:.4f} USDT"
+        else:
+            self._pnl.value = f"{sign}{value:.2f} USDT"
         self._pnl.color = ft.Colors.GREEN_400 if value >= 0 else ft.Colors.RED_400
         update_batcher.mark_dirty(self._pnl)
 

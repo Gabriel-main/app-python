@@ -306,3 +306,29 @@ async def test_canceled_event_ignores_unknown_order():
     assert view._list_column.controls == []
     view._show_body()
     assert view._body.content is view._empty
+
+
+@pytest.mark.asyncio
+async def test_executed_event_preserves_purpose_and_pnl():
+    view = OrdersView()
+    view._loading = False
+    event = OrderExecutedEvent(
+        order_id="sl-1",
+        symbol="SOLUSDT",
+        side="SELL",
+        quantity=0.085,
+        price=70.45,
+        mode="PAPER",
+        entry_price=70.49,
+        purpose="EXIT",
+        pnl=-0.04,
+    )
+    await view._on_order_executed(event)
+    record = view._records["sl-1"]
+    assert record["purpose"] == "EXIT"
+    assert record["pnl"] == -0.04
+    card = view._cards["sl-1"]
+    assert card.purpose == "EXIT"
+    assert card._purpose_chip.content.value == "CIERRE SL"
+    assert card.pnl_text == "-0.04 USDT"
+    await _drain(view)

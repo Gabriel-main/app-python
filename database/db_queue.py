@@ -299,12 +299,16 @@ class DBQueueWorker:
                     "status": "FILLED",
                     "limit_price": event.limit_price,
                     "entry_price": event.entry_price,
+                    "purpose": getattr(event, "purpose", "ENTRY"),
+                    "pnl": getattr(event, "pnl", None),
                     "timestamp": event.timestamp,
                 },
                 updates={
                     "price": event.price,
                     "status": "FILLED",
                     "quantity": event.quantity,
+                    "purpose": getattr(event, "purpose", "ENTRY"),
+                    "pnl": getattr(event, "pnl", None),
                 },
             )
         except Exception as exc:
@@ -327,6 +331,8 @@ class DBQueueWorker:
                     "status": "PENDING",
                     "limit_price": event.price,
                     "entry_price": 0.0,
+                    "purpose": "ENTRY",
+                    "pnl": None,
                     "timestamp": event.timestamp,
                 },
                 updates={},

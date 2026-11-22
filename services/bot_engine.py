@@ -1127,6 +1127,18 @@ class BotEngine:
         distinto de `op.side` (lado de la operación). `purpose` distingue
         apertura/cierre para que paper_balance no acredite cierres como ventas.
         """
+        pnl: float | None = None
+        if purpose == "EXIT" and op.entry_price > 0:
+            from services.pnl_calculator import PnLCalculator
+            exit_price = placement.fill_price if placement.fill_price > 0 else op.stop_loss
+            _, calc_pnl = PnLCalculator.calc_closed_pnl(
+                capital=settings.TRADE_AMOUNT,
+                entry_price=op.entry_price,
+                stop_loss=exit_price,
+                side=op.side,
+            )
+            pnl = round(calc_pnl, 4)
+
         return OrderExecutedEvent(
             order_id=placement.order_id,
             symbol=request.symbol,
@@ -1142,6 +1154,7 @@ class BotEngine:
             limit_price=request.price if request.order_type == "LIMIT" else 0.0,
             operation_id=op.order_id,  # OC-xxx / OV-xxx (Fase 4)
             purpose=purpose,
+            pnl=pnl,
             timestamp=time.time(),
         )
 
