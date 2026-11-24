@@ -228,7 +228,7 @@ class ConnectionStatusSnapshotEvent:
 class BotStateChangedEvent:
     """El bot fue activado o desactivado desde la UI."""
     is_running: bool
-    mode: Literal["PAPER", "LIVE"]
+    mode: Literal["PAPER", "LIVE"] = "PAPER"
 
 
 @dataclass
@@ -251,7 +251,7 @@ class SettingsUpdatedEvent:
 @dataclass
 class NavigateToEvent:
     """Solicitud de navegación a un tab específico."""
-    index: int  # 0=Dashboard, 1=Órdenes, 2=Config, 3=Auditoría, 4=Settings(Ajustes del Bot)
+    index: int  # 0=Dashboard, 1=Órdenes, 2=Config, 3=Auditoría, 4=Settings, 5=Help
 
 
 # ---------------------------------------------------------------------------

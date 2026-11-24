@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import flet as ft
 
 from config.settings import settings
+from core.event_bus import event_bus
+from core.events import NavigateToEvent
 from core.update_batcher import update_batcher
 from services.trading_rules import MIN_FUTURES_NOTIONAL, validate_amount
 from ui.components.api_key_manager import ApiKeyManager
@@ -652,6 +654,42 @@ class OperationParamsSection(ft.Container):
             "", size=11, color=ft.Colors.RED_400, visible=False,
         )
 
+        # --- Tarjeta explicativa de velocidad de Stop Loss ---
+        self._sl_hint_text = ft.Text(
+            self._get_sl_speed_text(settings.STOP_LOSS, settings.STOP_LOSS_TYPE),
+            size=11,
+            color=ft.Colors.BLUE_GREY_300,
+        )
+        self._sl_hint_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.SPEED, size=15, color=ft.Colors.AMBER_400),
+                            ft.Text("Velocidad de ejecución:", size=11, weight=ft.FontWeight.W_600, color=ft.Colors.AMBER_300),
+                        ],
+                        spacing=6,
+                    ),
+                    self._sl_hint_text,
+                    ft.Container(
+                        content=ft.TextButton(
+                            content=ft.Text("📖 Ver Guía Completa de Stop Loss", size=11, color=ft.Colors.CYAN_300),
+                            style=ft.ButtonStyle(
+                                padding=ft.Padding(0, 0, 0, 0),
+                            ),
+                            on_click=self._on_open_help,
+                        ),
+                        alignment=ft.Alignment(-1, 0),
+                    ),
+                ],
+                spacing=3,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.AMBER_400),
+            border=ft.Border.all(0.8, ft.Colors.with_opacity(0.25, ft.Colors.AMBER_400)),
+            border_radius=8,
+            padding=ft.Padding(10, 8, 10, 8),
+        )
+
         self.bgcolor = ft.Colors.BLUE_GREY_900
         self.border_radius = 14
         self.padding = ft.Padding.all(16)
@@ -665,6 +703,7 @@ class OperationParamsSection(ft.Container):
                 self._symbol_picker,
                 ft.Row(controls=[self._sl_field, self._sl_type_dropdown], spacing=8),
                 self._sl_error,
+                self._sl_hint_card,
                 ft.Row(controls=[self._timeframe_field, self._timeframe_unit_dropdown], spacing=8),
                 self._timeframe_error,
             ],
@@ -684,12 +723,33 @@ class OperationParamsSection(ft.Container):
     def _on_sl_type_changed(self, e=None) -> None:
         sl_type = self.get_sl_type()
         self._sl_field.hint_text = "0.10" if sl_type == "USDT" else "1.01"
+        self._update_sl_hint()
         update_batcher.mark_dirty(self._sl_field)
         self._notify_change(e)
 
     def _notify_change(self, *args) -> None:
+        self._update_sl_hint()
         if self._on_change:
             self._on_change()
+
+    @staticmethod
+    def _get_sl_speed_text(sl: float, sl_type: str) -> str:
+        unit = "%" if sl_type == "PERCENT" else "USDT"
+        if sl <= 0.3:
+            return f"⚡ Con {sl:g}{unit}: la operación saldrá y rotará MUY RÁPIDO con ligeras oscilaciones del mercado (scalping)."
+        elif sl >= 3.0:
+            return f"⏳ Con {sl:g}{unit}: la operación tendrá más holgura y TARDARÁ MÁS tiempo en tocar el Stop Loss."
+        else:
+            return f"⚖️ Con {sl:g}{unit}: mantiene un ritmo moderado de rotación frente a la volatilidad."
+
+    def _update_sl_hint(self) -> None:
+        sl = self.get_sl()
+        sl_type = self.get_sl_type()
+        self._sl_hint_text.value = self._get_sl_speed_text(sl, sl_type)
+        update_batcher.mark_dirty(self._sl_hint_text)
+
+    def _on_open_help(self, e: ft.ControlEvent) -> None:
+        event_bus.publish(NavigateToEvent(index=5))
 
     def get_symbol(self) -> str:
         return self._symbol_picker.get_selected_symbol()
@@ -744,6 +804,7 @@ class OperationParamsSection(ft.Container):
         self._sl_type_dropdown.value = form_snapshot["sl_type"]
         self._timeframe_field.value = str(form_snapshot["timeframe"])
         self._timeframe_unit_dropdown.value = form_snapshot["tf_unit"]
+        self._update_sl_hint()
 
     def set_disabled(self, disabled: bool) -> None:
         """Bloquea/desbloquea los campos de esta sección."""

@@ -19,6 +19,7 @@ class ViewRegistry:
     def __init__(self) -> None:
         self._views: dict[int, ft.Control] = {}
         self._settings_view: ft.Control | None = None
+        self._help_view: ft.Control | None = None
 
     def register_all(self) -> None:
         """Crea todas las vistas. Se llama una sola vez tras autenticarse."""
@@ -30,6 +31,7 @@ class ViewRegistry:
         from ui.views.config_view import ConfigView
         from ui.views.audit_view import AuditView
         from ui.views.settings_view import SettingsView
+        from ui.views.help_view import HelpView
         from services.symbol_repository import BinanceSymbolRepository
 
         self._views = {
@@ -41,11 +43,14 @@ class ViewRegistry:
         self._settings_view = SettingsView(
             symbol_repository=BinanceSymbolRepository(binance_service)
         )
+        self._help_view = HelpView()
 
     def get(self, index: int) -> ft.Control | None:
-        """Obtiene una vista por índice. Index 4 = SettingsView."""
+        """Obtiene una vista por índice. Index 4 = SettingsView, 5 = HelpView."""
         if index == 4:
             return self._settings_view
+        if index == 5:
+            return self._help_view
         return self._views.get(index)
 
     @property
@@ -56,3 +61,4 @@ class ViewRegistry:
         """Limpia el registro (para logout)."""
         self._views.clear()
         self._settings_view = None
+        self._help_view = None

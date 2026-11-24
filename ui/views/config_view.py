@@ -50,6 +50,13 @@ class ConfigView(ft.Column):
                 subtitle="Configurar parámetros de trading",
                 on_click=self._on_open_settings,
             ),
+            ft.Container(height=8),
+            self._build_menu_item(
+                icon=ft.Icons.MENU_BOOK_ROUNDED,
+                title="Guía y Ayuda del Bot",
+                subtitle="Stop Loss, % vs USDT y tiempos de ejecución",
+                on_click=self._on_open_help,
+            ),
             ft.Container(height=20),
             ft.Divider(color=ft.Colors.with_opacity(0.1, ft.Colors.WHITE)),
             ft.Container(height=20),
@@ -123,6 +130,10 @@ class ConfigView(ft.Column):
     def _on_open_settings(self, e: ft.ControlEvent) -> None:
         """Navega a la vista de Ajustes del Bot."""
         event_bus.publish(NavigateToEvent(index=4))
+
+    def _on_open_help(self, e: ft.ControlEvent) -> None:
+        """Navega a la vista de Guía y Ayuda del Bot."""
+        event_bus.publish(NavigateToEvent(index=5))
 
     def _on_logout(self, e: ft.ControlEvent) -> None:
         """Cierra sesión y vuelve al login."""

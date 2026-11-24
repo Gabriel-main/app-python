@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import settings
 from core.event_bus import event_bus
-from core.events import AuthStateChangedEvent, NavigateToEvent
+from core.events import AuthStateChangedEvent, BotStateChangedEvent, NavigateToEvent
 from core.logger import setup_logging
 from core.update_batcher import update_batcher
 from database.connection import create_db_and_tables
@@ -40,6 +40,14 @@ from services.paper_balance import paper_balance
 from ui.view_registry import ViewRegistry
 from ui.navigator import Navigator
 from ui.components.notification_toast import NotificationToast
+
+
+def _cleanup_session(view_registry: ViewRegistry, clear_overlay) -> None:
+    """Limpia el estado de sesión: pausa el bot si está activo y limpia vistas."""
+    if bot_engine.is_active:
+        event_bus.publish(BotStateChangedEvent(is_running=False, mode=getattr(settings, "TRADING_MODE", "PAPER")))
+    view_registry.clear()
+    clear_overlay()
 
 
 async def main(page: ft.Page) -> None:
@@ -187,6 +195,12 @@ async def main(page: ft.Page) -> None:
         view = view_registry.get(index)
         if view:
             navigator.navigate_to(index, view)
+            if index in (0, 1, 2, 3):
+                nav_bar.selected_index = index
+                update_batcher.mark_dirty(nav_bar)
+            elif index in (4, 5):
+                nav_bar.selected_index = 2
+                update_batcher.mark_dirty(nav_bar)
             if index == 4:
                 view.refresh_symbols()
 
@@ -216,8 +230,8 @@ async def main(page: ft.Page) -> None:
         if e.is_authenticated:
             _show_main_app()
         else:
+            _cleanup_session(view_registry, _clear_overlay)
             _show_login()
-            _clear_overlay()
 
     # ------------------------------------------------------------------
     # Estado inicial (antes de agregar a page)
