@@ -139,7 +139,7 @@ class SymbolPicker(ft.Container):
     """Selector de símbolo con búsqueda y lista scrollable.
 
     Delega toda la lógica de estado a SymbolListManager.
-    Solo maneja rendering y eventos de usuario.
+    Solo maneja rendering y eventos de usuario con diseño UI/UX premium.
     """
 
     def __init__(
@@ -154,69 +154,147 @@ class SymbolPicker(ft.Container):
         self._mgr._trading_type = trading_type
         self._is_open = False
 
+        # --- Campo de búsqueda ---
         self._search_field = ft.TextField(
-            hint_text="Buscar símbolo...",
-            hint_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400, size=13),
+            hint_text="Buscar símbolo (ej: BTC, ETH)...",
+            hint_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400, size=12),
             text_style=ft.TextStyle(color=ft.Colors.WHITE, size=13),
             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
             border_color=ft.Colors.BLUE_GREY_700,
             focused_border_color=ft.Colors.CYAN_400,
             border_radius=10,
-            content_padding=ft.Padding(left=10, right=10, top=8, bottom=8),
-            suffix_icon=ft.Icons.SEARCH,
-            suffix_style=ft.TextStyle(color=ft.Colors.BLUE_GREY_400),
+            content_padding=ft.Padding(left=10, right=10, top=9, bottom=9),
+            prefix_icon=ft.Icons.SEARCH,
             on_change=self._on_search,
             on_focus=self._on_search_focus,
             expand=True,
         )
 
+        # --- Lista de opciones scrollable ---
         self._options_column = ft.Column(
             controls=[],
-            spacing=2,
-            scroll=ft.ScrollMode.ALWAYS,
-            height=MAX_VISIBLE_ITEMS * ITEM_HEIGHT,
+            spacing=4,
+            scroll=ft.ScrollMode.AUTO,
+            height=280,
         )
 
-        self._counter_text = ft.Text("", size=10, color=ft.Colors.BLUE_GREY_500)
+        self._counter_text = ft.Text("", size=11, color=ft.Colors.BLUE_GREY_300)
+        self._market_pill_text = ft.Text(self._mgr.trading_type, size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_300)
+        self._market_pill = ft.Container(
+            content=self._market_pill_text,
+            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.CYAN_400),
+            border_radius=6,
+            padding=ft.Padding(left=6, right=6, top=2, bottom=2),
+        )
 
+        # --- Dropdown panel flotante ---
         self._overlay = ft.Container(
-            bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.GREY_900),
-            border=ft.Border.all(1, ft.Colors.BLUE_GREY_700),
-            border_radius=12,
-            padding=ft.Padding(left=8, right=8, top=8, bottom=8),
+            bgcolor="#101726",
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.35, ft.Colors.CYAN_400)),
+            border_radius=14,
+            padding=ft.Padding(left=12, right=12, top=12, bottom=10),
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=16,
+                color=ft.Colors.BLACK_54,
+                offset=ft.Offset(0, 6),
+            ),
             visible=False,
-            width=280,
             content=ft.Column(
                 controls=[
                     self._search_field,
-                    ft.Divider(height=1, color=ft.Colors.BLUE_GREY_800),
-                    self._counter_text,
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Row(
+                                    controls=[
+                                        ft.Icon(ft.Icons.TOKEN_OUTLINED, size=13, color=ft.Colors.CYAN_400),
+                                        self._counter_text,
+                                    ],
+                                    spacing=4,
+                                ),
+                                self._market_pill,
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        padding=ft.Padding(top=6, bottom=6),
+                    ),
+                    ft.Divider(height=1, thickness=1, color=ft.Colors.with_opacity(0.12, ft.Colors.BLUE_GREY_700)),
+                    ft.Container(height=4),
                     self._options_column,
                 ],
-                spacing=0,
+                spacing=2,
             ),
         )
 
+        # --- Componentes del trigger selector ---
         self._trigger_label = ft.Text(
             value=self._mgr.selection,
             size=14,
-            weight=ft.FontWeight.W_600,
+            weight=ft.FontWeight.W_700,
             color=ft.Colors.WHITE,
-            expand=True,
-            text_align=ft.TextAlign.LEFT,
+        )
+        self._trigger_quote = ft.Text(
+            value=f"/{self._mgr._currency}",
+            size=11,
+            color=ft.Colors.BLUE_GREY_400,
+        )
+        self._trigger_badge_text = ft.Text(
+            value=self._mgr.trading_type,
+            size=10,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.CYAN_300,
+        )
+        self._trigger_badge = ft.Container(
+            content=self._trigger_badge_text,
+            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.CYAN_400),
+            border_radius=6,
+            padding=ft.Padding(left=6, right=6, top=2, bottom=2),
+        )
+        self._arrow_icon = ft.Icon(
+            ft.Icons.KEYBOARD_ARROW_DOWN,
+            size=20,
+            color=ft.Colors.BLUE_GREY_400,
         )
 
         self._trigger = ft.Container(
-            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+            bgcolor=ft.Colors.GREY_900,
             border=ft.Border.all(1, ft.Colors.BLUE_GREY_700),
             border_radius=10,
-            padding=ft.Padding(left=12, right=8, top=8, bottom=8),
+            padding=ft.Padding(left=12, right=10, top=8, bottom=8),
             ink=True,
             on_click=self._on_trigger_click,
             content=ft.Row(
                 controls=[
-                    self._trigger_label,
-                    ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN, size=18, color=ft.Colors.BLUE_GREY_400),
+                    ft.Row(
+                        controls=[
+                            ft.Container(
+                                width=26,
+                                height=26,
+                                border_radius=13,
+                                bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.CYAN_400),
+                                alignment=ft.Alignment(0, 0),
+                                content=ft.Icon(
+                                    ft.Icons.CURRENCY_EXCHANGE,
+                                    size=15,
+                                    color=ft.Colors.CYAN_300,
+                                ),
+                            ),
+                            self._trigger_label,
+                            self._trigger_quote,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=6,
+                    ),
+                    ft.Row(
+                        controls=[
+                            self._trigger_badge,
+                            self._arrow_icon,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=6,
+                    ),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -224,7 +302,9 @@ class SymbolPicker(ft.Container):
         )
 
         self._loading_indicator = ft.ProgressRing(
-            width=16, height=16, stroke_width=2,
+            width=14,
+            height=14,
+            stroke_width=2,
             color=ft.Colors.CYAN_400,
         )
         self._loading_indicator.visible = False
@@ -242,7 +322,9 @@ class SymbolPicker(ft.Container):
                 self._overlay,
             ],
             spacing=4,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
+        self._sync_trigger_label()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -264,6 +346,9 @@ class SymbolPicker(ft.Container):
     def _close_overlay(self) -> None:
         self._is_open = False
         self._overlay.visible = False
+        self._arrow_icon.name = ft.Icons.KEYBOARD_ARROW_DOWN
+        self._arrow_icon.color = ft.Colors.BLUE_GREY_400
+        self._trigger.border = ft.Border.all(1, ft.Colors.BLUE_GREY_700)
 
     # ------------------------------------------------------------------
     # Data loading (delega al manager)
@@ -293,53 +378,143 @@ class SymbolPicker(ft.Container):
         self._options_column.controls.clear()
         filtered = self._mgr.filtered_symbols
         total = len(filtered)
-        self._counter_text.value = f"{total} símbolo{'s' if total != 1 else ''}"
+        self._counter_text.value = f"{total} par{'es' if total != 1 else ''} disponible{'s' if total != 1 else ''}"
 
         for s in filtered:
             price = float(s.get("price", 0))
-            if price >= 1:
+            if price >= 1000:
                 price_str = f"${price:,.2f}"
+            elif price >= 1:
+                price_str = f"${price:.2f}"
             elif price >= 0.01:
                 price_str = f"${price:.4f}"
             else:
                 price_str = f"${price:.8f}"
 
             is_selected = s["symbol"] == self._mgr.selection
+            base = s.get("base_asset", "")
+            quote = s.get("quote_asset", "")
+            avatar_txt = base[:2] if len(base) >= 2 else base
+
+            avatar = ft.Container(
+                width=24,
+                height=24,
+                border_radius=12,
+                bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.CYAN_400) if is_selected else ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+                alignment=ft.Alignment(0, 0),
+                content=ft.Text(
+                    avatar_txt,
+                    size=9,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.CYAN_300 if is_selected else ft.Colors.BLUE_GREY_300,
+                ),
+            )
+
+            row_controls = [
+                avatar,
+                ft.Row(
+                    controls=[
+                        ft.Text(base, size=13, weight=ft.FontWeight.W_700, color=ft.Colors.WHITE),
+                        ft.Text(f"/{quote}", size=11, color=ft.Colors.BLUE_GREY_400),
+                    ],
+                    spacing=2,
+                ),
+                ft.Container(expand=True),
+                ft.Text(
+                    price_str,
+                    size=12,
+                    weight=ft.FontWeight.W_600 if is_selected else ft.FontWeight.NORMAL,
+                    color=ft.Colors.CYAN_300 if is_selected else ft.Colors.WHITE_70,
+                ),
+            ]
+
+            if is_selected:
+                row_controls.append(
+                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=15, color=ft.Colors.CYAN_400)
+                )
 
             opt = ft.Container(
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE) if not is_selected
-                       else ft.Colors.with_opacity(0.15, ft.Colors.CYAN_700),
+                bgcolor=ft.Colors.with_opacity(0.14, ft.Colors.CYAN_700) if is_selected
+                        else ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
+                border=ft.Border.all(
+                    1,
+                    ft.Colors.with_opacity(0.4, ft.Colors.CYAN_400) if is_selected
+                    else ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                ),
                 border_radius=8,
-                padding=ft.Padding(left=10, right=10, top=6, bottom=6),
+                padding=ft.Padding(left=10, right=10, top=7, bottom=7),
                 on_click=self._on_option_click,
                 data=s["symbol"],
+                ink=True,
                 content=ft.Row(
-                    controls=[
-                        ft.Text(s["base_asset"], size=13, weight=ft.FontWeight.W_700, color=ft.Colors.WHITE),
-                        ft.Text(f" / {s['quote_asset']}", size=11, color=ft.Colors.BLUE_GREY_400),
-                        ft.Container(expand=True),
-                        ft.Text(price_str, size=12, color=ft.Colors.CYAN_300),
-                    ],
+                    controls=row_controls,
                     alignment=ft.MainAxisAlignment.START,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=8,
                 ),
             )
             self._options_column.controls.append(opt)
 
         if not filtered:
+            query = self._mgr._search_query
             self._options_column.controls.append(
                 ft.Container(
-                    padding=12,
-                    content=ft.Text("Sin resultados", size=13, color=ft.Colors.BLUE_GREY_400, text_align=ft.TextAlign.CENTER),
+                    padding=ft.Padding(left=12, right=12, top=24, bottom=24),
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Column(
+                        controls=[
+                            ft.Icon(ft.Icons.SEARCH_OFF, size=32, color=ft.Colors.BLUE_GREY_500),
+                            ft.Text(
+                                f'Sin resultados para "{query}"' if query else "No hay símbolos disponibles",
+                                size=13,
+                                weight=ft.FontWeight.W_500,
+                                color=ft.Colors.BLUE_GREY_300,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            ft.Text(
+                                "Intenta con BTC, ETH, SOL, XRP...",
+                                size=11,
+                                color=ft.Colors.BLUE_GREY_500,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
                 )
             )
 
-        self._options_column.update()
+        try:
+            self._options_column.update()
+        except RuntimeError:
+            pass
         update_batcher.mark_dirty(self._counter_text)
 
     def _sync_trigger_label(self) -> None:
         """Sincroniza el label del trigger con la selección del manager."""
-        self._trigger_label.value = self._mgr.selection
+        symbol = self._mgr.selection
+        quote = self._mgr._currency
+        base = symbol[:-len(quote)] if quote and symbol.endswith(quote) else symbol
+        self._trigger_label.value = base
+        self._trigger_quote.value = f"/{quote}"
+        self._trigger_badge_text.value = self._mgr.trading_type
+        self._market_pill_text.value = self._mgr.trading_type
+
+        # Color según tipo de mercado
+        if self._mgr.trading_type == "FUTURES":
+            badge_bg = ft.Colors.with_opacity(0.15, ft.Colors.AMBER_400)
+            badge_fg = ft.Colors.AMBER_300
+        elif self._mgr.trading_type == "MARGIN":
+            badge_bg = ft.Colors.with_opacity(0.15, ft.Colors.PURPLE_400)
+            badge_fg = ft.Colors.PURPLE_300
+        else:
+            badge_bg = ft.Colors.with_opacity(0.15, ft.Colors.CYAN_400)
+            badge_fg = ft.Colors.CYAN_300
+
+        self._trigger_badge.bgcolor = badge_bg
+        self._trigger_badge_text.color = badge_fg
+        self._market_pill.bgcolor = badge_bg
+        self._market_pill_text.color = badge_fg
 
     # ------------------------------------------------------------------
     # Event handlers de usuario
@@ -347,6 +522,15 @@ class SymbolPicker(ft.Container):
     def _on_trigger_click(self, e: ft.ControlEvent) -> None:
         self._is_open = not self._is_open
         self._overlay.visible = self._is_open
+        self._arrow_icon.name = (
+            ft.Icons.KEYBOARD_ARROW_UP if self._is_open else ft.Icons.KEYBOARD_ARROW_DOWN
+        )
+        self._arrow_icon.color = (
+            ft.Colors.CYAN_400 if self._is_open else ft.Colors.BLUE_GREY_400
+        )
+        self._trigger.border = ft.Border.all(
+            1, ft.Colors.CYAN_400 if self._is_open else ft.Colors.BLUE_GREY_700
+        )
         if self._is_open:
             self._search_field.value = ""
             self._mgr.set_search_query("")
@@ -361,13 +545,16 @@ class SymbolPicker(ft.Container):
         if not self._is_open:
             self._is_open = True
             self._overlay.visible = True
+            self._arrow_icon.name = ft.Icons.KEYBOARD_ARROW_UP
+            self._arrow_icon.color = ft.Colors.CYAN_400
+            self._trigger.border = ft.Border.all(1, ft.Colors.CYAN_400)
             update_batcher.mark_dirty(self)
 
     def _on_option_click(self, e: ft.ControlEvent) -> None:
         symbol = e.control.data
         if symbol and symbol != self._mgr.selection:
             self._mgr.set_selection(symbol)
-            self._trigger_label.value = symbol
+            self._sync_trigger_label()
             log.info("Symbol changed to: %s", symbol)
             if self._on_symbol_changed:
                 self._on_symbol_changed(symbol)
@@ -382,16 +569,19 @@ class SymbolPicker(ft.Container):
 
     def set_symbol(self, symbol: str) -> None:
         self._mgr.set_selection(symbol)
-        self._trigger_label.value = symbol
+        self._sync_trigger_label()
+        update_batcher.mark_dirty(self._trigger)
 
     def set_trading_type(self, trading_type: str) -> None:
         """Cambia el mercado y recarga los símbolos disponibles."""
         if self._mgr.set_trading_type(trading_type):
+            self._sync_trigger_label()
             self._trigger_reload()
 
     def set_currency(self, currency: str) -> None:
         """Cambia la moneda y recarga los símbolos disponibles."""
         if self._mgr.set_currency(currency):
+            self._sync_trigger_label()
             self._trigger_reload()
 
     def _trigger_reload(self) -> None:

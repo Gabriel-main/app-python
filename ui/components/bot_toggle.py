@@ -26,7 +26,7 @@ class BotToggle(ft.FilledButton):
         self._active: bool = False
         self.on_click = self._on_click
 
-        self.content = "▶  Iniciar Operaciones"
+        self.content = "Iniciar Operaciones"
         self.icon = ft.Icons.PLAY_CIRCLE
         self.style = ft.ButtonStyle(
             bgcolor=ft.Colors.GREEN_800,
@@ -68,11 +68,11 @@ class BotToggle(ft.FilledButton):
     # ------------------------------------------------------------------
     def _update_appearance(self) -> None:
         if self._active:
-            self.content = "⏸  Detener Operaciones"
+            self.content = "Detener Operaciones"
             self.style.bgcolor = ft.Colors.RED_800
             self.icon = ft.Icons.PAUSE_CIRCLE
         else:
-            self.content = "▶  Iniciar Operaciones"
+            self.content = "Iniciar Operaciones"
             self.style.bgcolor = ft.Colors.GREEN_800
             self.icon = ft.Icons.PLAY_CIRCLE
         update_batcher.mark_dirty(self)
