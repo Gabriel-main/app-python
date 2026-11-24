@@ -406,7 +406,7 @@ class TradingTypeSection(ft.Container):
             focused_color=ft.Colors.CYAN_400,
             hint_text="Ej: 65000.00",
             prefix_icon=ft.Icons.ATTACH_MONEY,
-            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
+            input_filter=ft.InputFilter(regex_string=r"^[0-9.,]*$", allow=True, replacement_string=""),
             visible=settings.ORDER_TYPE == "LIMIT",
             on_change=self._notify_change,
         )
@@ -571,7 +571,7 @@ class OperationParamsSection(ft.Container):
             focused_color=ft.Colors.CYAN_400,
             hint_text="10.0",
             prefix_icon=ft.Icons.ATTACH_MONEY,
-            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
+            input_filter=ft.InputFilter(regex_string=r"^[0-9.,]*$", allow=True, replacement_string=""),
             expand=True,
             on_change=self._notify_change,
         )
@@ -600,7 +600,7 @@ class OperationParamsSection(ft.Container):
             focused_color=ft.Colors.RED_400,
             hint_text=sl_hint,
             prefix_icon=ft.Icons.TRENDING_DOWN,
-            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
+            input_filter=ft.InputFilter(regex_string=r"^[0-9.,]*$", allow=True, replacement_string=""),
             expand=True,
             on_change=self._notify_change,
         )
@@ -624,6 +624,7 @@ class OperationParamsSection(ft.Container):
             hint_text="1",
             prefix_icon=ft.Icons.TIMER,
             keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"^[0-9]*$", allow=True, replacement_string=""),
             expand=True,
             on_change=self._notify_change,
         )
@@ -735,7 +736,9 @@ class OperationParamsSection(ft.Container):
     @staticmethod
     def _get_sl_speed_text(sl: float, sl_type: str) -> str:
         unit = "%" if sl_type == "PERCENT" else "USDT"
-        if sl <= 0.3:
+        if sl <= 0:
+            return "ℹ️ Ingresa un valor de Stop Loss mayor a 0 para ver la recomendación de velocidad."
+        elif sl <= 0.3:
             return f"⚡ Con {sl:g}{unit}: la operación saldrá y rotará MUY RÁPIDO con ligeras oscilaciones del mercado (scalping)."
         elif sl >= 3.0:
             return f"⏳ Con {sl:g}{unit}: la operación tendrá más holgura y TARDARÁ MÁS tiempo en tocar el Stop Loss."

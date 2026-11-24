@@ -540,3 +540,68 @@ def test_set_validation_errors_toggles():
     assert not section._amount_error.visible
     assert not section._sl_error.visible
     assert not section._timeframe_error.visible
+
+
+def test_input_filters_allow_empty_string_for_backspace_deletion():
+    """Verifica que los filtros de entrada permitan borrar hasta cadena vacía "" sin bloquearse."""
+    import re
+
+    params = OperationParamsSection()
+    tt = TradingTypeSection()
+
+    # SL field filter
+    sl_filter = params._sl_field.input_filter
+    assert sl_filter is not None
+    assert re.match(sl_filter.regex_string, "") is not None, "El filtro de SL debe permitir borrar el último dígito (cadena vacía)"
+    assert re.match(sl_filter.regex_string, "0.1") is not None
+    assert re.match(sl_filter.regex_string, "0,5") is not None
+    assert re.match(sl_filter.regex_string, "abc") is None
+
+    # Amount field filter
+    amount_filter = params._amount_field.input_filter
+    assert amount_filter is not None
+    assert re.match(amount_filter.regex_string, "") is not None, "El filtro de Monto debe permitir borrar el último dígito"
+    assert re.match(amount_filter.regex_string, "10.5") is not None
+    assert re.match(amount_filter.regex_string, "10,5") is not None
+    assert re.match(amount_filter.regex_string, "abc") is None
+
+    # Limit price field filter
+    lp_filter = tt._limit_price_field.input_filter
+    assert lp_filter is not None
+    assert re.match(lp_filter.regex_string, "") is not None, "El filtro de Precio Límite debe permitir borrar el último dígito"
+    assert re.match(lp_filter.regex_string, "70.5") is not None
+
+    # Timeframe field filter
+    tf_filter = params._timeframe_field.input_filter
+    assert tf_filter is not None
+    assert re.match(tf_filter.regex_string, "") is not None, "El filtro de Temporalidad debe permitir borrar hasta vacío"
+    assert re.match(tf_filter.regex_string, "15") is not None
+
+
+def test_sl_speed_text_empty_or_zero():
+    """Verifica que con valor 0 o vacío se muestre un mensaje orientativo y no de scalping."""
+    section = OperationParamsSection()
+    msg_zero = section._get_sl_speed_text(0.0, "PERCENT")
+    assert "mayor a 0" in msg_zero
+    assert "MUY RÁPIDO" not in msg_zero
+
+    msg_positive = section._get_sl_speed_text(0.1, "PERCENT")
+    assert "MUY RÁPIDO" in msg_positive
+
+
+def test_sl_field_empty_notify_change():
+    """Verifica que vaciar el campo de SL y llamar _notify_change funcione de forma reactiva y segura."""
+    changed = False
+
+    def on_change():
+        nonlocal changed
+        changed = True
+
+    section = OperationParamsSection(on_change=on_change)
+    section._sl_field.value = ""
+    section._notify_change()
+
+    assert changed
+    assert section.get_sl() == 0.0
+    assert "mayor a 0" in section._sl_hint_text.value
+
