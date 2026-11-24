@@ -498,6 +498,8 @@ def test_get_amount_safe_parse():
     assert section.get_amount() == 0.0  # vacío ya no asume 10.0
     section._amount_field.value = "25.5"
     assert section.get_amount() == 25.5
+    section._amount_field.value = "0,5"
+    assert section.get_amount() == 0.5
 
 
 def test_get_sl_safe_parse():
@@ -508,6 +510,10 @@ def test_get_sl_safe_parse():
     assert section.get_sl() == 0.0
     section._sl_field.value = "2.5"
     assert section.get_sl() == 2.5
+    section._sl_field.value = "0.1"
+    assert section.get_sl() == 0.1
+    section._sl_field.value = "0,5"
+    assert section.get_sl() == 0.5
 
 
 def test_get_timeframe_safe_parse():

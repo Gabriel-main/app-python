@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
@@ -33,8 +34,17 @@ def get_engine():
         _engine = create_async_engine(
             db_url,
             echo=False,
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 30.0},
         )
+
+        @event.listens_for(_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
+
         log.info("DB engine created: %s", db_url)
     return _engine
 

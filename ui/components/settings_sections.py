@@ -189,6 +189,7 @@ def _textfield(
     hint_text: str = "",
     prefix_icon: str | None = None,
     keyboard_type=None,
+    input_filter: ft.InputFilter | None = None,
     password: bool = False,
     reveal_password: bool = True,
     expand: bool = False,
@@ -215,6 +216,8 @@ def _textfield(
         kwargs["prefix_icon"] = prefix_icon
     if keyboard_type:
         kwargs["keyboard_type"] = keyboard_type
+    if input_filter:
+        kwargs["input_filter"] = input_filter
     if password:
         kwargs["password"] = True
         kwargs["can_reveal_password"] = reveal_password
@@ -401,7 +404,7 @@ class TradingTypeSection(ft.Container):
             focused_color=ft.Colors.CYAN_400,
             hint_text="Ej: 65000.00",
             prefix_icon=ft.Icons.ATTACH_MONEY,
-            keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
             visible=settings.ORDER_TYPE == "LIMIT",
             on_change=self._notify_change,
         )
@@ -502,7 +505,8 @@ class TradingTypeSection(ft.Container):
     def get_limit_price(self) -> float:
         """Precio límite parseado de forma segura (texto vacío/inválido → 0.0)."""
         try:
-            return float(self._limit_price_field.value or "0")
+            val = (self._limit_price_field.value or "0").replace(",", ".").strip()
+            return float(val or "0")
         except (TypeError, ValueError):
             return 0.0
 
@@ -565,7 +569,7 @@ class OperationParamsSection(ft.Container):
             focused_color=ft.Colors.CYAN_400,
             hint_text="10.0",
             prefix_icon=ft.Icons.ATTACH_MONEY,
-            keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
             expand=True,
             on_change=self._notify_change,
         )
@@ -587,13 +591,14 @@ class OperationParamsSection(ft.Container):
             symbol_repository=symbol_repository,
         )
 
+        sl_hint = "0.10" if settings.STOP_LOSS_TYPE == "USDT" else "1.01"
         self._sl_field = _textfield(
             label="Stop Loss",
             value=str(settings.STOP_LOSS),
             focused_color=ft.Colors.RED_400,
-            hint_text="1.01",
+            hint_text=sl_hint,
             prefix_icon=ft.Icons.TRENDING_DOWN,
-            keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"[0-9.,]"),
             expand=True,
             on_change=self._notify_change,
         )
@@ -607,7 +612,7 @@ class OperationParamsSection(ft.Container):
             ],
             focused_color=ft.Colors.RED_400,
             width=100,
-            on_select=self._notify_change,
+            on_select=self._on_sl_type_changed,
         )
 
         self._timeframe_field = _textfield(
@@ -676,6 +681,12 @@ class OperationParamsSection(ft.Container):
         if self._on_currency_changed_for_reload:
             self._on_currency_changed_for_reload(e.control.value)
 
+    def _on_sl_type_changed(self, e=None) -> None:
+        sl_type = self.get_sl_type()
+        self._sl_field.hint_text = "0.10" if sl_type == "USDT" else "1.01"
+        update_batcher.mark_dirty(self._sl_field)
+        self._notify_change(e)
+
     def _notify_change(self, *args) -> None:
         if self._on_change:
             self._on_change()
@@ -686,7 +697,8 @@ class OperationParamsSection(ft.Container):
     def get_amount(self) -> float:
         """Monto parseado de forma segura (texto vacío/inválido → 0.0)."""
         try:
-            return float(self._amount_field.value or "0")
+            val = (self._amount_field.value or "0").replace(",", ".").strip()
+            return float(val or "0")
         except (TypeError, ValueError):
             return 0.0
 
@@ -696,7 +708,8 @@ class OperationParamsSection(ft.Container):
     def get_sl(self) -> float:
         """Stop Loss parseado de forma segura (texto vacío/inválido → 0.0)."""
         try:
-            return float(self._sl_field.value or "0")
+            val = (self._sl_field.value or "0").replace(",", ".").strip()
+            return float(val or "0")
         except (TypeError, ValueError):
             return 0.0
 
