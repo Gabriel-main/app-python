@@ -2,12 +2,12 @@
 NotificationToast — Toast efímero para notificaciones de órdenes.
 
 Se suscribe a OrderExecutedEvent y OrderFailedEvent, muestra un toast
-auto-ocultable con fade-out.
+auto-ocultable con fade-out y reproduce un sonido de notificación.
 
 Principios:
 - SRP: Solo muestra notificaciones, no ejecuta lógica de negocio
 - OCP: Nuevo evento = nueva suscripción, no modificar existente
-- DIP: Depende de EventBus (abstracción)
+- DIP: Depende de EventBus (abstracción) y SoundManager (DIP)
 - REACTIVIDAD ATÓMICA: Solo control.update() vía update_batcher
 - CERO POLLING: Se oculta con asyncio.sleep + animate_opacity
 """
@@ -20,6 +20,7 @@ import flet as ft
 from core.event_bus import event_bus
 from core.events import OrderExecutedEvent, OrderFailedEvent
 from core.update_batcher import update_batcher
+from ui.components.sound_manager import sound_manager
 
 # Colores del toast
 _SUCCESS_COLOR = ft.Colors.GREEN_400
@@ -114,7 +115,7 @@ class NotificationToast(ft.Container):
     # Lógica del toast
     # ------------------------------------------------------------------
     def _show(self, *, success: bool, title: str, detail: str) -> None:
-        """Muestra el toast y programa auto-ocultamiento."""
+        """Muestra el toast, reproduce sonido y programa auto-ocultamiento."""
         self._icon.name = (
             ft.Icons.CHECK_CIRCLE if success else ft.Icons.ERROR
         )
@@ -126,6 +127,12 @@ class NotificationToast(ft.Container):
         # Cancelar auto-hide anterior si existe
         if self._hide_task and not self._hide_task.done():
             self._hide_task.cancel()
+
+        # Reproducir sonido de notificación
+        if success:
+            sound_manager.play_success()
+        else:
+            sound_manager.play_error()
 
         # Mostrar con fade-in
         self.content.visible = True

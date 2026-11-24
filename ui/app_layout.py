@@ -40,6 +40,7 @@ from services.paper_balance import paper_balance
 from ui.view_registry import ViewRegistry
 from ui.navigator import Navigator
 from ui.components.notification_toast import NotificationToast
+from ui.components.sound_manager import sound_manager
 
 
 def _cleanup_session(view_registry: ViewRegistry, clear_overlay) -> None:
@@ -157,6 +158,9 @@ async def main(page: ft.Page) -> None:
     # ------------------------------------------------------------------
     notification_toast = NotificationToast()
 
+    # Inicializar SoundManager
+    sound_manager.mount(page)
+
     background = ft.Container(
         expand=True,
         gradient=ft.LinearGradient(
@@ -224,6 +228,7 @@ async def main(page: ft.Page) -> None:
     def _clear_overlay() -> None:
         """Limpia diálogos del overlay después de logout."""
         page.overlay.clear()
+        sound_manager.remount(page)
         update_batcher.mark_dirty(page)
 
     async def _on_auth_changed(e: AuthStateChangedEvent) -> None:
